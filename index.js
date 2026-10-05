@@ -100,6 +100,27 @@ function isSupportMember(member) {
 
 
 // ==========================================
+// SENIOR SUPPORT ROLE CHECK
+// ==========================================
+
+function isSeniorSupportMember(member) {
+
+    if (
+        !member ||
+        !member.roles
+    ) {
+
+        return false;
+    }
+
+
+    return member.roles.cache.has(
+        config.seniorSupportStaffRoleId
+    );
+}
+
+
+// ==========================================
 // GET TICKET OWNER
 // ==========================================
 
@@ -563,10 +584,6 @@ client.on(
                     }
 
 
-                    // ==========================================
-                    // CHECK SUPPORT PERMISSION
-                    // ==========================================
-
                     if (
                         !isSupportMember(
                             interaction.member
@@ -586,10 +603,6 @@ client.on(
                         return;
                     }
 
-
-                    // ==========================================
-                    // CHECK CLAIMED STATUS
-                    // ==========================================
 
                     const claimedBy =
                         getClaimedUserId(
@@ -612,10 +625,6 @@ client.on(
                         return;
                     }
 
-
-                    // ==========================================
-                    // READ DESTINATION
-                    // ==========================================
 
                     let selected;
 
@@ -656,10 +665,6 @@ client.on(
                     }
 
 
-                    // ==========================================
-                    // READ OPTIONAL NOTES
-                    // ==========================================
-
                     let notes = '';
 
                     try {
@@ -675,10 +680,6 @@ client.on(
                         notes = '';
                     }
 
-
-                    // ==========================================
-                    // DETERMINE DESTINATION
-                    // ==========================================
 
                     let newCategoryId;
 
@@ -740,11 +741,7 @@ client.on(
                     }
 
 
-                    // ==========================================
-                    // ACKNOWLEDGE MODAL IMMEDIATELY
-                    // Prevents interaction timeout.
-                    // ==========================================
-
+                    // Acknowledge immediately.
                     await interaction.deferReply({
                         flags:
                             MessageFlags.Ephemeral
@@ -752,10 +749,6 @@ client.on(
 
 
                     try {
-
-                        // ==========================================
-                        // REMOVE CLAIMED PREFIX
-                        // ==========================================
 
                         const newChannelName =
                             channel.name.replace(
@@ -769,10 +762,6 @@ client.on(
                         );
 
 
-                        // ==========================================
-                        // MOVE CATEGORY
-                        // ==========================================
-
                         await channel.setParent(
                             newCategoryId,
                             {
@@ -780,10 +769,6 @@ client.on(
                             }
                         );
 
-
-                        // ==========================================
-                        // REMOVE CLAIMED USER
-                        // ==========================================
 
                         const updatedTopic =
                             (channel.topic || '')
@@ -798,10 +783,6 @@ client.on(
                         );
 
 
-                        // ==========================================
-                        // OWNER
-                        // ==========================================
-
                         const ownerId =
                             getTicketOwnerId(
                                 channel
@@ -814,10 +795,6 @@ client.on(
                                 : 'Customer';
 
 
-                        // ==========================================
-                        // BUILD HANDOFF MESSAGE
-                        // ==========================================
-
                         let handoffMessage =
 
                             `${ownerMention}\n\n` +
@@ -826,10 +803,6 @@ client.on(
 
                             `A support member will be with you shortly.`;
 
-
-                        // ==========================================
-                        // ADD NOTES IF PROVIDED
-                        // ==========================================
 
                         if (notes) {
 
@@ -853,10 +826,6 @@ client.on(
 
                         }
 
-
-                        // ==========================================
-                        // HANDOFF CONTAINER
-                        // ==========================================
 
                         const handoffContainer =
                             new ContainerBuilder()
@@ -890,10 +859,6 @@ client.on(
 
                         });
 
-
-                        // ==========================================
-                        // SUCCESS
-                        // ==========================================
 
                         await interaction.editReply({
 
@@ -1234,9 +1199,11 @@ client.on(
                     }
 
 
-                    // ==========================================
-                    // CHECK EXISTING CLAIM
-                    // ==========================================
+                    const isSenior =
+                        isSeniorSupportMember(
+                            member
+                        );
+
 
                     const alreadyClaimedBy =
                         getClaimedUserId(
@@ -1244,7 +1211,14 @@ client.on(
                         );
 
 
-                    if (alreadyClaimedBy) {
+                    // ==========================================
+                    // EXISTING CLAIM
+                    // ==========================================
+
+                    if (
+                        alreadyClaimedBy &&
+                        !isSenior
+                    ) {
 
                         let claimedMention =
                             `<@${alreadyClaimedBy}>`;
@@ -1284,6 +1258,36 @@ client.on(
 
 
                     // ==========================================
+                    // SENIOR SUPPORT OVERRIDE
+                    // ==========================================
+
+                    if (
+                        alreadyClaimedBy &&
+                        isSenior
+                    ) {
+
+                        if (
+                            alreadyClaimedBy ===
+                            interaction.user.id
+                        ) {
+
+                            await interaction.reply({
+
+                                content:
+                                    '❌ You have already claimed this ticket.',
+
+                                flags:
+                                    MessageFlags.Ephemeral
+
+                            });
+
+                            return;
+                        }
+
+                    }
+
+
+                    // ==========================================
                     // PREVENT SIMULTANEOUS CLAIMS
                     // ==========================================
 
@@ -1296,7 +1300,7 @@ client.on(
                         await interaction.reply({
 
                             content:
-                                '❌ Someone else is already claiming this ticket.',
+                                '❌ Someone else is already processing this ticket.',
 
                             flags:
                                 MessageFlags.Ephemeral
@@ -1315,7 +1319,7 @@ client.on(
                     try {
 
                         // ==========================================
-                        // RE-CHECK AFTER LOCK
+                        // RE-CHECK
                         // ==========================================
 
                         const latestClaim =
@@ -1324,7 +1328,10 @@ client.on(
                             );
 
 
-                        if (latestClaim) {
+                        if (
+                            latestClaim &&
+                            !isSenior
+                        ) {
 
                             await interaction.reply({
 
@@ -1340,10 +1347,6 @@ client.on(
                         }
 
 
-                        // ==========================================
-                        // ACKNOWLEDGE
-                        // ==========================================
-
                         await interaction.deferReply({
 
                             flags:
@@ -1351,10 +1354,6 @@ client.on(
 
                         });
 
-
-                        // ==========================================
-                        // OWNER
-                        // ==========================================
 
                         const ownerId =
                             getTicketOwnerId(
@@ -1373,10 +1372,6 @@ client.on(
                                 channel
                             );
 
-
-                        // ==========================================
-                        // ADD CLAIMED PREFIX
-                        // ==========================================
 
                         let newName =
                             channel.name;
@@ -1400,7 +1395,7 @@ client.on(
 
 
                         // ==========================================
-                        // ADD CLAIMED USER TO TOPIC
+                        // REPLACE CLAIM
                         // ==========================================
 
                         let topic =
@@ -1427,15 +1422,34 @@ client.on(
                         // CLAIM MESSAGE
                         // ==========================================
 
+                        let claimText;
+
+
+                        if (
+                            latestClaim &&
+                            isSenior
+                        ) {
+
+                            claimText =
+
+                                `${ownerMention} | ${interaction.user} has taken over this ${ticketTypeName} ticket from <@${latestClaim}> as Senior Support.`;
+
+                        } else {
+
+                            claimText =
+
+                                `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`;
+
+                        }
+
+
                         const claimContainer =
                             new ContainerBuilder()
                                 .addTextDisplayComponents(
 
                                     new TextDisplayBuilder()
                                         .setContent(
-
-                                            `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`
-
+                                            claimText
                                         )
 
                                 );
@@ -1454,22 +1468,34 @@ client.on(
 
                                 users:
                                     ownerId
-                                        ? [ownerId]
-                                        : []
+                                        ? [
+                                            ownerId,
+                                            ...(latestClaim &&
+                                            isSenior
+                                                ? [latestClaim]
+                                                : [])
+                                        ]
+                                        : (
+                                            latestClaim &&
+                                            isSenior
+                                                ? [latestClaim]
+                                                : []
+                                        )
 
                             }
 
                         });
 
 
-                        // ==========================================
-                        // SUCCESS
-                        // ==========================================
-
                         await interaction.editReply({
 
                             content:
-                                '✅ Ticket claimed.'
+                                latestClaim &&
+                                isSenior
+
+                                    ? '✅ Ticket taken over successfully.'
+
+                                    : '✅ Ticket claimed.'
 
                         });
 
@@ -1553,9 +1579,6 @@ client.on(
 
 
                     try {
-
-                        // Acknowledge the button
-                        // before deleting the channel.
 
                         await interaction.deferUpdate();
 
@@ -1694,10 +1717,6 @@ client.on(
                             );
 
 
-                    // ==========================================
-                    // DESTINATION SELECT
-                    // ==========================================
-
                     const select =
                         new StringSelectMenuBuilder()
 
@@ -1764,10 +1783,6 @@ client.on(
                         destinationLabel
                     );
 
-
-                    // ==========================================
-                    // OPTIONAL NOTES
-                    // ==========================================
 
                     const notesInput =
                         new TextInputBuilder()
