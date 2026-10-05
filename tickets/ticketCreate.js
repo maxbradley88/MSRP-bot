@@ -16,17 +16,46 @@ const {
 
 const config = require('./ticketConfig');
 
-async function createTicket(interaction, ticketType, answers = {}) {
+const {
+    setupTicketIcons,
+    getTicketEmoji
+} = require('./ticketIcons');
 
-    const guild = interaction.guild;
-    const user = interaction.user;
 
-    const typeConfig = config.ticketTypes[ticketType];
+// ==========================================
+// CREATE TICKET
+// ==========================================
+
+async function createTicket(
+    interaction,
+    ticketType,
+    answers = {}
+) {
+
+    const guild =
+        interaction.guild;
+
+    const user =
+        interaction.user;
+
+    const typeConfig =
+        config.ticketTypes[ticketType];
+
+
+    // ==========================================
+    // CHECK TICKET TYPE
+    // ==========================================
 
     if (!typeConfig) {
+
         await interaction.reply({
-            content: '❌ This ticket type does not exist.',
-            flags: MessageFlags.Ephemeral
+
+            content:
+                '❌ This ticket type does not exist.',
+
+            flags:
+                MessageFlags.Ephemeral
+
         });
 
         return;
@@ -44,6 +73,7 @@ async function createTicket(interaction, ticketType, answers = {}) {
         typeConfig.category === 3;
 
     let categoryId;
+
 
     if (isReportsAppealsTicket) {
 
@@ -63,48 +93,139 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
 
     // ==========================================
-    // CHECK USER TICKET LIMIT
+    // GET USER'S OPEN TICKETS
     // ==========================================
 
     const userTickets =
-        guild.channels.cache.filter(channel =>
-            channel.topic?.startsWith(
-                `ticket-owner:${user.id}`
-            )
+        guild.channels.cache.filter(
+            channel =>
+                channel.topic?.includes(
+                    `ticket-owner:${user.id}`
+                ) &&
+                channel.topic?.includes(
+                    'ticket-type:'
+                )
         );
 
-    const userTicketCount =
-        userTickets.size;
 
+    // ==========================================
+    // COUNT SUPPORT TICKETS
+    // GENERAL + OTHER
+    // ==========================================
+
+    const supportTicketCount =
+        userTickets.filter(channel => {
+
+            const match =
+                channel.topic?.match(
+                    /ticket-type:([^|]+)/
+                );
+
+            const currentType =
+                match
+                    ? match[1]
+                    : null;
+
+            return [
+                'general',
+                'other'
+            ].includes(
+                currentType
+            );
+
+        }).size;
+
+
+    // ==========================================
+    // COUNT HIGHER UP TICKETS
+    // ==========================================
+
+    const seniorTicketCount =
+        userTickets.filter(channel => {
+
+            const match =
+                channel.topic?.match(
+                    /ticket-type:([^|]+)/
+                );
+
+            return (
+                match &&
+                match[1] === 'higherup'
+            );
+
+        }).size;
+
+
+    // ==========================================
+    // COUNT REPORTS + APPEALS
+    // ==========================================
+
+    const reportsAppealsTicketCount =
+        userTickets.filter(channel => {
+
+            const match =
+                channel.topic?.match(
+                    /ticket-type:([^|]+)/
+                );
+
+            const currentType =
+                match
+                    ? match[1]
+                    : null;
+
+            return [
+                'report',
+                'appeal'
+            ].includes(
+                currentType
+            );
+
+        }).size;
+
+
+    // ==========================================
+    // ENFORCE SUPPORT LIMIT
+    // ==========================================
 
     if (
         !isSeniorTicket &&
-        userTicketCount >=
-            config.maxTicketsPerUser
+        !isReportsAppealsTicket &&
+        supportTicketCount >=
+            config.maxSupportTicketsPerUser
     ) {
 
         await interaction.reply({
+
             content:
-                `❌ You already have the maximum number of open tickets (${config.maxTicketsPerUser}).`,
+                `❌ You already have the maximum number of open Support tickets (${config.maxSupportTicketsPerUser}).`,
+
             flags:
                 MessageFlags.Ephemeral
+
         });
 
         return;
     }
 
 
+    // ==========================================
+    // ENFORCE SENIOR LIMIT
+    // ==========================================
+
     if (
         isSeniorTicket &&
-        userTicketCount >=
+        seniorTicketCount >=
             config.maxSeniorTicketsPerUser
     ) {
 
         await interaction.reply({
+
             content:
-                `❌ You already have the maximum number of open Senior Support tickets (${config.maxSeniorTicketsPerUser}).`,
+                `❌ You already have the maximum number of open Higher Up tickets (${config.maxSeniorTicketsPerUser}).`,
+
             flags:
                 MessageFlags.Ephemeral
+
         });
 
         return;
@@ -112,7 +233,38 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
 
     // ==========================================
-    // PERMISSIONS
+    // ENFORCE REPORTS + APPEALS LIMIT
+    // ==========================================
+
+    if (
+        isReportsAppealsTicket &&
+        reportsAppealsTicketCount >=
+            config.maxReportsAppealsTicketsPerUser
+    ) {
+
+        await interaction.reply({
+
+            content:
+                `❌ You already have the maximum number of open Reports & Appeals tickets (${config.maxReportsAppealsTicketsPerUser}).`,
+
+            flags:
+                MessageFlags.Ephemeral
+
+        });
+
+        return;
+    }
+
+
+    // ==========================================
+    // MAKE SURE CUSTOM EMOJIS EXIST
+    // ==========================================
+
+    await setupTicketIcons(guild);
+
+
+    // ==========================================
+    // GET STAFF ROLES
     // ==========================================
 
     const supportRole =
@@ -142,6 +294,10 @@ async function createTicket(interaction, ticketType, answers = {}) {
         );
     }
 
+
+    // ==========================================
+    // PERMISSIONS
+    // ==========================================
 
     const permissionOverwrites = [
 
@@ -229,7 +385,8 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
 
     const paddedNumber =
-        String(ticketNumber).padStart(3, '0');
+        String(ticketNumber)
+            .padStart(3, '0');
 
 
     // ==========================================
@@ -239,7 +396,10 @@ async function createTicket(interaction, ticketType, answers = {}) {
     const safeUsername =
         user.username
             .toLowerCase()
-            .replace(/[^a-z0-9-]/g, '-');
+            .replace(
+                /[^a-z0-9-]/g,
+                '-'
+            );
 
 
     const channelName =
@@ -247,7 +407,7 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
 
     // ==========================================
-    // CREATE TICKET CHANNEL
+    // CREATE CHANNEL
     // ==========================================
 
     const ticketChannel =
@@ -287,7 +447,7 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
 
     // ==========================================
-    // TOP NORMAL MESSAGE
+    // STAFF TAG MESSAGE
     // ==========================================
 
     await ticketChannel.send({
@@ -299,7 +459,7 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
 
     // ==========================================
-    // FORM RESPONSES
+    // BUILD FORM RESPONSES
     // ==========================================
 
     const responseLines = [];
@@ -362,7 +522,30 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
 
     // ==========================================
-    // TICKET CONTROL BUTTONS
+    // GET CUSTOM BUTTON EMOJIS
+    // ==========================================
+
+    const claimEmoji =
+        getTicketEmoji(
+            guild,
+            'claim'
+        );
+
+    const closeEmoji =
+        getTicketEmoji(
+            guild,
+            'close'
+        );
+
+    const handoffEmoji =
+        getTicketEmoji(
+            guild,
+            'handoff'
+        );
+
+
+    // ==========================================
+    // BUTTONS
     // ==========================================
 
     const ticketButtons =
@@ -379,7 +562,9 @@ async function createTicket(interaction, ticketType, answers = {}) {
                     .setStyle(
                         ButtonStyle.Success
                     )
-                    .setEmoji('✓'),
+                    .setEmoji(
+                        claimEmoji
+                    ),
 
                 new ButtonBuilder()
                     .setCustomId(
@@ -391,7 +576,9 @@ async function createTicket(interaction, ticketType, answers = {}) {
                     .setStyle(
                         ButtonStyle.Danger
                     )
-                    .setEmoji('🔒'),
+                    .setEmoji(
+                        closeEmoji
+                    ),
 
                 new ButtonBuilder()
                     .setCustomId(
@@ -403,23 +590,21 @@ async function createTicket(interaction, ticketType, answers = {}) {
                     .setStyle(
                         ButtonStyle.Secondary
                     )
-                    .setEmoji('↗')
+                    .setEmoji(
+                        handoffEmoji
+                    )
 
             );
 
 
     // ==========================================
-    // COMPONENTS V2 WELCOME CONTAINER
+    // MAIN TICKET CONTAINER
     // ==========================================
 
     const welcomeContainer =
         new ContainerBuilder()
 
-
-            // ==========================================
-            // TOP IMAGE
-            // ==========================================
-
+            // IMAGE
             .addMediaGalleryComponents(
 
                 new MediaGalleryBuilder()
@@ -434,11 +619,7 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
             )
 
-
-            // ==========================================
             // DIVIDER
-            // ==========================================
-
             .addSeparatorComponents(
 
                 new SeparatorBuilder()
@@ -446,11 +627,7 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
             )
 
-
-            // ==========================================
-            // WELCOME MESSAGE
-            // ==========================================
-
+            // WELCOME
             .addTextDisplayComponents(
 
                 new TextDisplayBuilder()
@@ -465,11 +642,7 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
             )
 
-
-            // ==========================================
             // DIVIDER
-            // ==========================================
-
             .addSeparatorComponents(
 
                 new SeparatorBuilder()
@@ -477,28 +650,20 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
             )
 
-
-            // ==========================================
-            // DETAILS HEADING + RESPONSES
-            // ==========================================
-
+            // FORM RESPONSES
             .addTextDisplayComponents(
 
                 new TextDisplayBuilder()
                     .setContent(
 
-                        '__**Details & Information**__\n\n' +
+                        '__Details & Information__\n\n' +
                         responsesText
 
                     )
 
             )
 
-
-            // ==========================================
             // DIVIDER
-            // ==========================================
-
             .addSeparatorComponents(
 
                 new SeparatorBuilder()
@@ -506,11 +671,7 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
             )
 
-
-            // ==========================================
             // BOTTOM IMAGE
-            // ==========================================
-
             .addMediaGalleryComponents(
 
                 new MediaGalleryBuilder()
@@ -525,18 +686,14 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
             )
 
-
-            // ==========================================
-            // BUTTONS
-            // ==========================================
-
+            // BUTTONS INSIDE CONTAINER
             .addActionRowComponents(
                 ticketButtons
             );
 
 
     // ==========================================
-    // SEND EVERYTHING ONCE
+    // SEND MAIN CONTAINER
     // ==========================================
 
     await ticketChannel.send({

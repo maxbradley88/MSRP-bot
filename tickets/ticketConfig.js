@@ -2,12 +2,8 @@ const easyConfig = require('./easyConfig');
 
 module.exports = {
 
-    guildId: process.env.DISCORD_GUILD_ID,
-
-
-    // ==========================================
-    // DASHBOARD
-    // ==========================================
+    guildId:
+        process.env.DISCORD_GUILD_ID,
 
     dashboardText:
         easyConfig.dashboardText,
@@ -23,7 +19,7 @@ module.exports = {
 
 
     // ==========================================
-    // SERVER CHANNELS
+    // CHANNELS
     // ==========================================
 
     supportChannelId:
@@ -37,7 +33,7 @@ module.exports = {
 
 
     // ==========================================
-    // TICKET CATEGORIES
+    // CATEGORIES
     // ==========================================
 
     supportTicketCategoryId:
@@ -63,16 +59,23 @@ module.exports = {
     reportsAppealsStaffRoleId:
         easyConfig.reportsAppealsRoleId,
 
+    // Used by the existing support-role checks
+    reportsAppealsRoleId:
+        easyConfig.reportsAppealsRoleId,
+
 
     // ==========================================
     // TICKET LIMITS
     // ==========================================
 
-    maxTicketsPerUser:
-        easyConfig.maxTicketsPerUser,
+    maxSupportTicketsPerUser:
+        easyConfig.maxSupportTicketsPerUser,
 
     maxSeniorTicketsPerUser:
         easyConfig.maxSeniorTicketsPerUser,
+
+    maxReportsAppealsTicketsPerUser:
+        easyConfig.maxReportsAppealsTicketsPerUser,
 
 
     // ==========================================
@@ -81,5 +84,4 @@ module.exports = {
 
     ticketTypes:
         easyConfig.ticketTypes
-
 };

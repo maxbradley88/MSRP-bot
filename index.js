@@ -19,7 +19,9 @@ const {
     TextInputBuilder,
     TextInputStyle,
     StringSelectMenuBuilder,
-    StringSelectMenuOptionBuilder
+    StringSelectMenuOptionBuilder,
+    ContainerBuilder,
+    TextDisplayBuilder
 } = require('discord.js');
 
 console.log('✅ discord.js loaded');
@@ -80,30 +82,9 @@ function isSupportMember(member) {
         ) ||
 
         member.roles.cache.has(
-            config.reportsAppealsStaffRoleId
+            config.reportsAppealsRoleId
         )
 
-    );
-}
-
-
-// ==========================================
-// SENIOR ROLE CHECK
-// ==========================================
-
-function isSeniorSupport(member) {
-
-    if (
-        !member ||
-        !member.roles
-    ) {
-
-        return false;
-    }
-
-
-    return member.roles.cache.has(
-        config.seniorSupportStaffRoleId
     );
 }
 
@@ -118,7 +99,6 @@ function getTicketOwnerId(channel) {
         channel.topic?.match(
             /ticket-owner:(\d+)/
         );
-
 
     return match
         ? match[1]
@@ -137,7 +117,6 @@ function getTicketType(channel) {
             /ticket-type:([^|]+)/
         );
 
-
     return match
         ? match[1]
         : null;
@@ -155,7 +134,6 @@ function getClaimedUserId(channel) {
             /claimed-by:(\d+)/
         );
 
-
     return match
         ? match[1]
         : null;
@@ -171,7 +149,6 @@ function getTicketTypeName(channel) {
     const ticketType =
         getTicketType(channel);
 
-
     if (
         ticketType &&
         config.ticketTypes[ticketType]
@@ -181,7 +158,6 @@ function getTicketTypeName(channel) {
             ticketType
         ].name;
     }
-
 
     return 'support';
 }
@@ -200,7 +176,7 @@ client.once(
         );
 
         console.log(
-            `🤖 MSRP Bot is online!`
+            '🤖 MSRP Bot is online!'
         );
 
 
@@ -248,12 +224,10 @@ client.once(
         } catch (error) {
 
             console.error(
-
                 '❌ Failed to register slash commands:',
-
                 error
-
             );
+
         }
 
     }
@@ -288,6 +262,7 @@ client.on(
 
                 return;
             }
+
         }
 
 
@@ -299,11 +274,6 @@ client.on(
             interaction.isStringSelectMenu()
         ) {
 
-
-            // ==========================================
-            // TICKET TYPE DROPDOWN
-            // ==========================================
-
             if (
                 interaction.customId ===
                 'ticket_type_select'
@@ -311,7 +281,6 @@ client.on(
 
                 const ticketType =
                     interaction.values[0];
-
 
                 const typeConfig =
                     config.ticketTypes[
@@ -352,10 +321,6 @@ client.on(
                         );
 
 
-                // ==========================================
-                // ADD QUESTIONS
-                // ==========================================
-
                 for (
                     const question of
                     questions.slice(0, 5)
@@ -363,7 +328,7 @@ client.on(
 
 
                     // ==========================================
-                    // DROPDOWN QUESTION
+                    // DROPDOWN
                     // ==========================================
 
                     if (
@@ -377,11 +342,9 @@ client.on(
 
                                     const builder =
                                         new StringSelectMenuOptionBuilder()
-
                                             .setLabel(
                                                 option.label
                                             )
-
                                             .setValue(
                                                 option.value
                                             );
@@ -446,13 +409,12 @@ client.on(
                             label
                         );
 
-
                         continue;
                     }
 
 
                     // ==========================================
-                    // TEXT QUESTION
+                    // TEXT INPUT
                     // ==========================================
 
                     const input =
@@ -565,10 +527,6 @@ client.on(
                     interaction.channel;
 
 
-                // ==========================================
-                // CHECK SUPPORT
-                // ==========================================
-
                 if (
                     !isSupportMember(
                         interaction.member
@@ -588,10 +546,6 @@ client.on(
                     return;
                 }
 
-
-                // ==========================================
-                // CHECK CLAIMED
-                // ==========================================
 
                 const claimedBy =
                     getClaimedUserId(
@@ -615,20 +569,12 @@ client.on(
                 }
 
 
-                // ==========================================
-                // GET SELECTION
-                // ==========================================
-
                 const selected =
                     interaction.fields
                         .getStringSelectValues(
                             'handoff_destination'
                         )[0];
 
-
-                // ==========================================
-                // DETERMINE DESTINATION
-                // ==========================================
 
                 let newCategoryId;
 
@@ -690,10 +636,6 @@ client.on(
                 }
 
 
-                // ==========================================
-                // REMOVE CLAIMED FROM NAME
-                // ==========================================
-
                 const newChannelName =
                     channel.name.replace(
                         /^CLAIMED-/i,
@@ -706,10 +648,6 @@ client.on(
                 );
 
 
-                // ==========================================
-                // MOVE CATEGORY
-                // ==========================================
-
                 await channel.setParent(
                     newCategoryId,
                     {
@@ -717,10 +655,6 @@ client.on(
                     }
                 );
 
-
-                // ==========================================
-                // REMOVE CLAIMED FROM TOPIC
-                // ==========================================
 
                 const updatedTopic =
                     (channel.topic || '')
@@ -735,10 +669,6 @@ client.on(
                 );
 
 
-                // ==========================================
-                // CUSTOMER
-                // ==========================================
-
                 const ownerId =
                     getTicketOwnerId(
                         channel
@@ -751,23 +681,11 @@ client.on(
                         : 'Customer';
 
 
-                // ==========================================
-                // HAND OFF MESSAGE
-                // ==========================================
-
                 const handoffContainer =
-                    new (
-                        require('discord.js')
-                            .ContainerBuilder
-                    )
-
+                    new ContainerBuilder()
                         .addTextDisplayComponents(
 
-                            new (
-                                require('discord.js')
-                                    .TextDisplayBuilder
-                            )
-
+                            new TextDisplayBuilder()
                                 .setContent(
 
                                     `${ownerMention} | This ticket has been handed to ${destinationName}, a support member will be with you shortly`
@@ -798,7 +716,6 @@ client.on(
                         MessageFlags.Ephemeral
 
                 });
-
 
                 return;
             }
@@ -844,10 +761,6 @@ client.on(
                 const answers = {};
 
 
-                // ==========================================
-                // COLLECT ANSWERS
-                // ==========================================
-
                 for (
                     const question of
                     typeConfig.questions || []
@@ -871,7 +784,6 @@ client.on(
                                 question.id
                             ] =
                                 values[0];
-
 
                         } else {
 
@@ -900,31 +812,19 @@ client.on(
                 }
 
 
-                // ==========================================
-                // CREATE TICKET
-                // ==========================================
-
                 try {
 
                     await createTicket(
-
                         interaction,
-
                         ticketType,
-
                         answers
-
                     );
-
 
                 } catch (error) {
 
                     console.error(
-
                         '❌ Ticket form submission error:',
-
                         error
-
                     );
 
 
@@ -946,7 +846,6 @@ client.on(
                     }
 
                 }
-
 
                 return;
             }
@@ -1041,22 +940,15 @@ client.on(
                 try {
 
                     await createTicket(
-
                         interaction,
-
                         ticketType
-
                     );
-
 
                 } catch (error) {
 
                     console.error(
-
                         '❌ Ticket creation error:',
-
                         error
-
                     );
 
 
@@ -1079,7 +971,6 @@ client.on(
 
                 }
 
-
                 return;
             }
 
@@ -1096,10 +987,6 @@ client.on(
                 const member =
                     interaction.member;
 
-
-                // ==========================================
-                // CHECK SUPPORT ROLE
-                // ==========================================
 
                 if (
                     !isSupportMember(
@@ -1134,10 +1021,6 @@ client.on(
                 }
 
 
-                // ==========================================
-                // CUSTOMER
-                // ==========================================
-
                 const ownerId =
                     getTicketOwnerId(
                         channel
@@ -1150,19 +1033,11 @@ client.on(
                         : 'Customer';
 
 
-                // ==========================================
-                // TICKET TYPE
-                // ==========================================
-
                 const ticketTypeName =
                     getTicketTypeName(
                         channel
                     );
 
-
-                // ==========================================
-                // ADD CLAIMED TO NAME
-                // ==========================================
 
                 let newName =
                     channel.name;
@@ -1185,10 +1060,6 @@ client.on(
                 );
 
 
-                // ==========================================
-                // SAVE CLAIMED USER
-                // ==========================================
-
                 let topic =
                     channel.topic || '';
 
@@ -1209,23 +1080,11 @@ client.on(
                 );
 
 
-                // ==========================================
-                // CLAIM MESSAGE
-                // ==========================================
-
                 const claimContainer =
-                    new (
-                        require('discord.js')
-                            .ContainerBuilder
-                    )
-
+                    new ContainerBuilder()
                         .addTextDisplayComponents(
 
-                            new (
-                                require('discord.js')
-                                    .TextDisplayBuilder
-                            )
-
+                            new TextDisplayBuilder()
                                 .setContent(
 
                                     `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`
@@ -1257,7 +1116,6 @@ client.on(
 
                 });
 
-
                 return;
             }
 
@@ -1270,9 +1128,6 @@ client.on(
                 interaction.customId ===
                 'ticket_close'
             ) {
-
-                // CLOSE IS INTENTIONALLY
-                // INACTIVE FOR NOW.
 
                 await interaction.deferUpdate();
 
@@ -1292,10 +1147,6 @@ client.on(
                 const member =
                     interaction.member;
 
-
-                // ==========================================
-                // CHECK SUPPORT
-                // ==========================================
 
                 if (
                     !isSupportMember(
@@ -1321,10 +1172,6 @@ client.on(
                     interaction.channel;
 
 
-                // ==========================================
-                // CHECK CLAIMED
-                // ==========================================
-
                 const claimedBy =
                     getClaimedUserId(
                         channel
@@ -1347,10 +1194,6 @@ client.on(
                 }
 
 
-                // ==========================================
-                // CREATE HAND OFF MODAL
-                // ==========================================
-
                 const modal =
                     new ModalBuilder()
 
@@ -1362,10 +1205,6 @@ client.on(
                             'Hand Off Ticket'
                         );
 
-
-                // ==========================================
-                // HAND OFF DROPDOWN
-                // ==========================================
 
                 const select =
                     new StringSelectMenuBuilder()
@@ -1394,7 +1233,6 @@ client.on(
                                     'reports_appeals'
                                 ),
 
-
                             new StringSelectMenuOptionBuilder()
 
                                 .setLabel(
@@ -1404,7 +1242,6 @@ client.on(
                                 .setValue(
                                     'support'
                                 ),
-
 
                             new StringSelectMenuOptionBuilder()
 

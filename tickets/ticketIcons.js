@@ -32,10 +32,25 @@ const icons = {
         lucide: 'clipboard-list'
     },
 
-information: {
-    name: 'msrp_information_v2',
-    lucide: 'info'
-}
+    information: {
+        name: 'msrp_information_v2',
+        lucide: 'info'
+    },
+
+    claim: {
+        name: 'msrp_claim',
+        lucide: 'check'
+    },
+
+    close: {
+        name: 'msrp_close',
+        lucide: 'lock'
+    },
+
+    handoff: {
+        name: 'msrp_handoff',
+        lucide: 'handshake'
+    }
 };
 
 
@@ -52,7 +67,9 @@ function createLucideSvg(icon) {
         'triangle-alert': lucide.TriangleAlert,
         'clipboard-list': lucide.ClipboardList,
         'handshake': lucide.Handshake,
-        'ellipsis': lucide.Ellipsis
+        'ellipsis': lucide.Ellipsis,
+        'check': lucide.Check,
+        'lock': lucide.Lock
     };
 
     const svg = lucideIcons[icon];
@@ -76,7 +93,7 @@ async function setupTicketIcons(guild) {
 
     const emojiMap = {};
 
-    for (const [ticketType, iconConfig] of Object.entries(icons)) {
+    for (const [iconKey, iconConfig] of Object.entries(icons)) {
 
         let emoji = guild.emojis.cache.find(
             existing => existing.name === iconConfig.name
@@ -107,7 +124,7 @@ async function setupTicketIcons(guild) {
             );
         }
 
-        emojiMap[ticketType] = {
+        emojiMap[iconKey] = {
             id: emoji.id,
             name: emoji.name
         };
@@ -117,6 +134,36 @@ async function setupTicketIcons(guild) {
 }
 
 
+// ==========================================
+// GET A TICKET EMOJI
+// ==========================================
+
+function getTicketEmoji(guild, iconKey) {
+
+    const iconConfig = icons[iconKey];
+
+    if (!iconConfig) {
+        return null;
+    }
+
+    const emoji =
+        guild.emojis.cache.find(
+            existing =>
+                existing.name === iconConfig.name
+        );
+
+    if (!emoji) {
+        return null;
+    }
+
+    return {
+        id: emoji.id,
+        name: emoji.name
+    };
+}
+
+
 module.exports = {
-    setupTicketIcons
+    setupTicketIcons,
+    getTicketEmoji
 };
