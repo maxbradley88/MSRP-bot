@@ -28,51 +28,63 @@ const client = new Client({
 });
 
 // ======================================================
-// TICKET HELPERS
+// HELPERS
 // ======================================================
 
 function isSupportMember(member) {
-    if (!member?.roles) return false;
+    if (!member?.roles?.cache) return false;
 
     return (
-        member.roles.cache.has(config.supportStaffRoleId) ||
-        member.roles.cache.has(config.seniorSupportStaffRoleId) ||
-        member.roles.cache.has(config.reportsAppealsRoleId)
+        member.roles.cache.has(
+            config.supportStaffRoleId
+        ) ||
+        member.roles.cache.has(
+            config.seniorSupportStaffRoleId
+        ) ||
+        member.roles.cache.has(
+            config.reportsAppealsRoleId
+        )
     );
 }
 
 function isSeniorSupportMember(member) {
-    return !!member?.roles?.cache?.has(
+    if (!member?.roles?.cache) return false;
+
+    return member.roles.cache.has(
         config.seniorSupportStaffRoleId
     );
 }
 
 function getTicketOwnerId(channel) {
-    const match = channel.topic?.match(
-        /ticket-owner:(\d+)/
-    );
+    const match =
+        channel.topic?.match(
+            /(?:^|\|)ticket-owner:(\d+)/
+        );
 
     return match ? match[1] : null;
 }
 
 function getTicketType(channel) {
-    const match = channel.topic?.match(
-        /ticket-type:([^|]+)/
-    );
+    const match =
+        channel.topic?.match(
+            /(?:^|\|)ticket-type:([^|]+)/
+        );
 
     return match ? match[1] : null;
 }
 
 function getClaimedUserId(channel) {
-    const match = channel.topic?.match(
-        /(?:^|\|)claimed-by:(\d+)/
-    );
+    const match =
+        channel.topic?.match(
+            /(?:^|\|)claimed-by:(\d+)/
+        );
 
     return match ? match[1] : null;
 }
 
 function getTicketTypeName(channel) {
-    const type = getTicketType(channel);
+    const type =
+        getTicketType(channel);
 
     if (
         type &&
@@ -88,33 +100,6 @@ function getTicketTypeName(channel) {
     return 'support';
 }
 
-function isCurrentClaimant(member, channel) {
-    const claimedBy =
-        getClaimedUserId(channel);
-
-    if (!claimedBy) {
-        return false;
-    }
-
-    return claimedBy === member?.user?.id;
-}
-
-function canManageTicket(member, channel) {
-    // Senior Support Staff can manage ANY ticket.
-    if (
-        isSeniorSupportMember(member)
-    ) {
-        return true;
-    }
-
-    // Normal support staff can only manage
-    // tickets they personally claimed.
-    return isCurrentClaimant(
-        member,
-        channel
-    );
-}
-
 // ======================================================
 // READY
 // ======================================================
@@ -122,6 +107,7 @@ function canManageTicket(member, channel) {
 client.once(
     'clientReady',
     async () => {
+
         console.log(
             `Logged in as ${client.user.tag}`
         );
@@ -131,12 +117,14 @@ client.once(
         );
 
         const rest =
-            new REST({ version: '10' })
-                .setToken(
-                    process.env.DISCORD_TOKEN
-                );
+            new REST({
+                version: '10'
+            }).setToken(
+                process.env.DISCORD_TOKEN
+            );
 
         try {
+
             await rest.put(
                 Routes.applicationGuildCommands(
                     client.user.id,
@@ -154,6 +142,7 @@ client.once(
             );
 
         } catch (error) {
+
             console.error(
                 'Failed to register slash commands:',
                 error
@@ -197,173 +186,170 @@ client.on(
             // ==================================================
 
             if (
-                interaction.isStringSelectMenu()
+                interaction.isStringSelectMenu() &&
+                interaction.customId ===
+                'ticket_type_select'
             ) {
 
-                if (
-                    interaction.customId ===
-                    'ticket_type_select'
+                const ticketType =
+                    interaction.values[0];
+
+                const typeConfig =
+                    config.ticketTypes[
+                        ticketType
+                    ];
+
+                if (!typeConfig) {
+
+                    await interaction.reply({
+                        content:
+                            '❌ This ticket type does not exist.',
+                        flags:
+                            MessageFlags.Ephemeral
+                    });
+
+                    return;
+                }
+
+                const modal =
+                    new ModalBuilder()
+                        .setCustomId(
+                            `ticket_form:${ticketType}`
+                        )
+                        .setTitle(
+                            typeConfig.name ||
+                            typeConfig.label ||
+                            'Ticket'
+                        );
+
+                for (
+                    const question of
+                    (
+                        typeConfig.questions ||
+                        []
+                    ).slice(0, 5)
                 ) {
 
-                    const ticketType =
-                        interaction.values[0];
-
-                    const typeConfig =
-                        config.ticketTypes[
-                            ticketType
-                        ];
-
-                    if (!typeConfig) {
-                        await interaction.reply({
-                            content:
-                                '❌ This ticket type does not exist.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-
-                        return;
-                    }
-
-                    const modal =
-                        new ModalBuilder()
-                            .setCustomId(
-                                `ticket_form:${ticketType}`
-                            )
-                            .setTitle(
-                                typeConfig.name ||
-                                typeConfig.label ||
-                                'Ticket'
-                            );
-
-                    for (
-                        const question of
-                        (
-                            typeConfig.questions ||
-                            []
-                        ).slice(0, 5)
+                    if (
+                        question.type ===
+                        'dropdown'
                     ) {
 
-                        if (
-                            question.type ===
-                            'dropdown'
-                        ) {
+                        const options =
+                            question.options.map(
+                                option => {
 
-                            const options =
-                                question.options.map(
-                                    option => {
-
-                                        const builder =
-                                            new StringSelectMenuOptionBuilder()
-                                                .setLabel(
-                                                    option.label
-                                                )
-                                                .setValue(
-                                                    option.value
-                                                );
-
-                                        if (
-                                            option.description
-                                        ) {
-                                            builder.setDescription(
-                                                option.description
+                                    const builder =
+                                        new StringSelectMenuOptionBuilder()
+                                            .setLabel(
+                                                option.label
+                                            )
+                                            .setValue(
+                                                option.value
                                             );
-                                        }
 
-                                        return builder;
+                                    if (
+                                        option.description
+                                    ) {
+                                        builder.setDescription(
+                                            option.description
+                                        );
                                     }
-                                );
 
-                            const select =
-                                new StringSelectMenuBuilder()
-                                    .setCustomId(
-                                        question.id
-                                    )
-                                    .setPlaceholder(
-                                        question.placeholder ||
-                                        'Select an option...'
-                                    )
-                                    .setMinValues(1)
-                                    .setMaxValues(1)
-                                    .setRequired(
-                                        question.required ??
-                                        true
-                                    )
-                                    .addOptions(
-                                        options
-                                    );
-
-                            modal.addLabelComponents(
-                                new LabelBuilder()
-                                    .setLabel(
-                                        question.label
-                                    )
-                                    .setStringSelectMenuComponent(
-                                        select
-                                    )
+                                    return builder;
+                                }
                             );
 
-                            continue;
-                        }
-
-                        const input =
-                            new TextInputBuilder()
+                        const select =
+                            new StringSelectMenuBuilder()
                                 .setCustomId(
                                     question.id
                                 )
-                                .setStyle(
-                                    question.style ===
-                                    'Short'
-                                        ? TextInputStyle.Short
-                                        : TextInputStyle.Paragraph
+                                .setPlaceholder(
+                                    question.placeholder ||
+                                    'Select an option...'
                                 )
+                                .setMinValues(1)
+                                .setMaxValues(1)
                                 .setRequired(
                                     question.required ??
                                     true
+                                )
+                                .addOptions(
+                                    options
                                 );
-
-                        if (
-                            question.placeholder
-                        ) {
-                            input.setPlaceholder(
-                                question.placeholder
-                            );
-                        }
-
-                        if (
-                            question.minLength !==
-                            undefined
-                        ) {
-                            input.setMinLength(
-                                question.minLength
-                            );
-                        }
-
-                        if (
-                            question.maxLength !==
-                            undefined
-                        ) {
-                            input.setMaxLength(
-                                question.maxLength
-                            );
-                        }
 
                         modal.addLabelComponents(
                             new LabelBuilder()
                                 .setLabel(
                                     question.label
                                 )
-                                .setTextInputComponent(
-                                    input
+                                .setStringSelectMenuComponent(
+                                    select
                                 )
+                        );
+
+                        continue;
+                    }
+
+                    const input =
+                        new TextInputBuilder()
+                            .setCustomId(
+                                question.id
+                            )
+                            .setStyle(
+                                question.style ===
+                                'Short'
+                                    ? TextInputStyle.Short
+                                    : TextInputStyle.Paragraph
+                            )
+                            .setRequired(
+                                question.required ??
+                                true
+                            );
+
+                    if (
+                        question.placeholder
+                    ) {
+                        input.setPlaceholder(
+                            question.placeholder
                         );
                     }
 
-                    await interaction.showModal(
-                        modal
-                    );
+                    if (
+                        question.minLength !==
+                        undefined
+                    ) {
+                        input.setMinLength(
+                            question.minLength
+                        );
+                    }
 
-                    return;
+                    if (
+                        question.maxLength !==
+                        undefined
+                    ) {
+                        input.setMaxLength(
+                            question.maxLength
+                        );
+                    }
+
+                    modal.addLabelComponents(
+                        new LabelBuilder()
+                            .setLabel(
+                                question.label
+                            )
+                            .setTextInputComponent(
+                                input
+                            )
+                    );
                 }
+
+                await interaction.showModal(
+                    modal
+                );
+
+                return;
             }
 
             // ==================================================
@@ -386,10 +372,6 @@ client.on(
                     const channel =
                         interaction.channel;
 
-                    console.log(
-                        `[HANDOFF] Modal submitted in ${channel?.id}`
-                    );
-
                     if (
                         !channel ||
                         !channel.isTextBased()
@@ -404,11 +386,34 @@ client.on(
                         return;
                     }
 
+                    const claimedBy =
+                        getClaimedUserId(
+                            channel
+                        );
+
+                    const isSenior =
+                        isSeniorSupportMember(
+                            interaction.member
+                        );
+
+                    console.log(
+                        `[HANDOFF MODAL] User: ${interaction.user.id}`
+                    );
+
+                    console.log(
+                        `[HANDOFF MODAL] Claimed by: ${claimedBy || 'NONE'}`
+                    );
+
+                    console.log(
+                        `[HANDOFF MODAL] Senior: ${isSenior}`
+                    );
+
                     if (
                         !isSupportMember(
                             interaction.member
                         )
                     ) {
+
                         await interaction.reply({
                             content:
                                 '❌ Only a support member can use this.',
@@ -419,28 +424,8 @@ client.on(
                         return;
                     }
 
-                    if (
-                        !canManageTicket(
-                            interaction.member,
-                            channel
-                        )
-                    ) {
-                        await interaction.reply({
-                            content:
-                                '❌ Only the staff member who claimed this ticket or Senior Support Staff can hand it off.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-
-                        return;
-                    }
-
-                    const claimedBy =
-                        getClaimedUserId(
-                            channel
-                        );
-
                     if (!claimedBy) {
+
                         await interaction.reply({
                             content:
                                 '❌ This ticket must be claimed before it can be handed off.',
@@ -451,35 +436,34 @@ client.on(
                         return;
                     }
 
-                    try {
+                    if (
+                        !isSenior &&
+                        claimedBy !==
+                        interaction.user.id
+                    ) {
 
-                        console.log(
-                            '[HANDOFF] Acknowledging modal...'
-                        );
+                        await interaction.reply({
+                            content:
+                                '❌ You can only hand off tickets that you have claimed.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+                        return;
+                    }
+
+                    try {
 
                         await interaction.deferReply({
                             flags:
                                 MessageFlags.Ephemeral
                         });
 
-                        console.log(
-                            '[HANDOFF] Modal acknowledged.'
-                        );
-
                         const selected =
                             interaction.fields
                                 .getStringSelectValues(
                                     'handoff_destination'
                                 )?.[0];
-
-                        if (!selected) {
-                            await interaction.editReply({
-                                content:
-                                    '❌ Please select a hand off destination.'
-                            });
-
-                            return;
-                        }
 
                         let notes = '';
 
@@ -490,9 +474,7 @@ client.on(
                                         'handoff_notes'
                                     )
                                     ?.trim() || '';
-                        } catch {
-                            notes = '';
-                        }
+                        } catch {}
 
                         let newCategoryId;
                         let destinationName;
@@ -543,63 +525,36 @@ client.on(
                             return;
                         }
 
-                        // ------------------------------------------
-                        // REMOVE CLAIMED FROM CHANNEL NAME
-                        // ------------------------------------------
-
-                        const newChannelName =
+                        const newName =
                             channel.name.replace(
                                 /^CLAIMED-/i,
                                 ''
                             );
 
-                        console.log(
-                            `[HANDOFF] Renaming ${channel.name} -> ${newChannelName}`
-                        );
-
                         await channel.setName(
-                            newChannelName
-                        );
-
-                        // ------------------------------------------
-                        // MOVE CATEGORY
-                        // ------------------------------------------
-
-                        console.log(
-                            `[HANDOFF] Moving to category ${newCategoryId}`
+                            newName
                         );
 
                         await channel.setParent(
                             newCategoryId,
                             {
-                                lockPermissions: false
+                                lockPermissions:
+                                    false
                             }
                         );
 
-                        // ------------------------------------------
-                        // REMOVE CLAIM
-                        // ------------------------------------------
-
-                        let updatedTopic =
+                        let newTopic =
                             channel.topic || '';
 
-                        updatedTopic =
-                            updatedTopic.replace(
+                        newTopic =
+                            newTopic.replace(
                                 /\|claimed-by:\d+/,
                                 ''
                             );
 
-                        console.log(
-                            '[HANDOFF] Removing claimed-by from topic.'
-                        );
-
                         await channel.setTopic(
-                            updatedTopic
+                            newTopic
                         );
-
-                        // ------------------------------------------
-                        // MESSAGE
-                        // ------------------------------------------
 
                         const ownerId =
                             getTicketOwnerId(
@@ -611,14 +566,15 @@ client.on(
                                 ? `<@${ownerId}>`
                                 : 'Customer';
 
-                        let handoffMessage =
+                        let message =
                             `${ownerMention}\n\n` +
                             `**This ticket has been handed to ${destinationName}.**\n` +
                             `A support member will be with you shortly.`;
 
                         if (notes) {
 
-                            const formattedNotes =
+                            message +=
+                                `\n\n**Notes from previous staff member**\n` +
                                 notes
                                     .split('\n')
                                     .map(
@@ -626,25 +582,20 @@ client.on(
                                             `> ${line}`
                                     )
                                     .join('\n');
-
-                            handoffMessage +=
-                                `\n\n` +
-                                `**Notes from previous staff member**\n` +
-                                formattedNotes;
                         }
 
-                        const handoffContainer =
+                        const container =
                             new ContainerBuilder()
                                 .addTextDisplayComponents(
                                     new TextDisplayBuilder()
                                         .setContent(
-                                            handoffMessage
+                                            message
                                         )
                                 );
 
                         await channel.send({
                             components: [
-                                handoffContainer
+                                container
                             ],
                             flags:
                                 MessageFlags.IsComponentsV2,
@@ -661,21 +612,17 @@ client.on(
                                 '✅ Ticket handed off successfully.'
                         });
 
-                        console.log(
-                            '[HANDOFF] COMPLETE.'
-                        );
-
                     } catch (error) {
 
                         console.error(
-                            '[HANDOFF] ERROR:',
+                            '[HANDOFF MODAL ERROR]',
                             error
                         );
 
                         try {
                             await interaction.editReply({
                                 content:
-                                    '❌ Something went wrong while handing off this ticket. The error has been logged.'
+                                    '❌ Something went wrong while handing off this ticket.'
                             });
                         } catch {}
                     }
@@ -702,6 +649,7 @@ client.on(
                         ];
 
                     if (!typeConfig) {
+
                         await interaction.reply({
                             content:
                                 '❌ This ticket type does not exist.',
@@ -773,6 +721,7 @@ client.on(
                             !interaction.replied &&
                             !interaction.deferred
                         ) {
+
                             await interaction.reply({
                                 content:
                                     '❌ Something went wrong while creating your ticket.',
@@ -795,7 +744,7 @@ client.on(
             ) {
 
                 // ==================================================
-                // TICKET RULES
+                // RULES
                 // ==================================================
 
                 if (
@@ -833,7 +782,7 @@ client.on(
                 }
 
                 // ==================================================
-                // TICKET CREATION BUTTONS
+                // TICKET CREATION
                 // ==================================================
 
                 if (
@@ -855,32 +804,10 @@ client.on(
                             ''
                         );
 
-                    try {
-
-                        await createTicket(
-                            interaction,
-                            ticketType
-                        );
-
-                    } catch (error) {
-
-                        console.error(
-                            'Ticket creation error:',
-                            error
-                        );
-
-                        if (
-                            !interaction.replied &&
-                            !interaction.deferred
-                        ) {
-                            await interaction.reply({
-                                content:
-                                    '❌ Something went wrong while creating your ticket.',
-                                flags:
-                                    MessageFlags.Ephemeral
-                            });
-                        }
-                    }
+                    await createTicket(
+                        interaction,
+                        ticketType
+                    );
 
                     return;
                 }
@@ -894,20 +821,26 @@ client.on(
                     'ticket_claim'
                 ) {
 
-                    const member =
-                        interaction.member;
-
                     const channel =
                         interaction.channel;
 
+                    const userId =
+                        interaction.user.id;
+
+                    const isSenior =
+                        isSeniorSupportMember(
+                            interaction.member
+                        );
+
                     console.log(
-                        `[CLAIM] ${interaction.user.tag} clicked Claim in ${channel?.id}`
+                        `[CLAIM] User=${userId} Senior=${isSenior} Channel=${channel?.id}`
                     );
 
                     if (
                         !channel ||
                         !channel.isTextBased()
                     ) {
+
                         await interaction.reply({
                             content:
                                 '❌ This ticket channel could not be found.',
@@ -919,8 +852,11 @@ client.on(
                     }
 
                     if (
-                        !isSupportMember(member)
+                        !isSupportMember(
+                            interaction.member
+                        )
                     ) {
+
                         await interaction.reply({
                             content:
                                 '❌ Only a member of the MSRP support team can use this.',
@@ -931,34 +867,22 @@ client.on(
                         return;
                     }
 
-                    const isSenior =
-                        isSeniorSupportMember(
-                            member
-                        );
-
-                    // Read the REAL current claim
-                    // from the channel topic.
-                    const alreadyClaimedBy =
+                    const claimedBy =
                         getClaimedUserId(
                             channel
                         );
 
                     console.log(
-                        `[CLAIM] Existing claimant: ${alreadyClaimedBy || 'none'}`
-                    );
-
-                    console.log(
-                        `[CLAIM] Is SSS: ${isSenior}`
+                        `[CLAIM] ClaimedBy=${claimedBy || 'NONE'}`
                     );
 
                     // ------------------------------------------
-                    // ALREADY CLAIMED
+                    // SAME PERSON
                     // ------------------------------------------
 
                     if (
-                        alreadyClaimedBy &&
-                        alreadyClaimedBy ===
-                        interaction.user.id
+                        claimedBy ===
+                        userId
                     ) {
 
                         await interaction.reply({
@@ -971,16 +895,18 @@ client.on(
                         return;
                     }
 
-                    // Normal SS cannot override another
-                    // person's claim.
+                    // ------------------------------------------
+                    // SOMEONE ELSE
+                    // ------------------------------------------
+
                     if (
-                        alreadyClaimedBy &&
+                        claimedBy &&
                         !isSenior
                     ) {
 
                         await interaction.reply({
                             content:
-                                `❌ This ticket has already been claimed by <@${alreadyClaimedBy}>.`,
+                                `❌ This ticket has already been claimed by <@${claimedBy}>.`,
                             flags:
                                 MessageFlags.Ephemeral
                         });
@@ -988,23 +914,17 @@ client.on(
                         return;
                     }
 
-                    try {
+                    // ------------------------------------------
+                    // CLAIM / TAKEOVER
+                    // ------------------------------------------
 
-                        console.log(
-                            '[CLAIM] Acknowledging interaction...'
-                        );
+                    try {
 
                         await interaction.deferReply({
                             flags:
                                 MessageFlags.Ephemeral
                         });
 
-                        console.log(
-                            '[CLAIM] Interaction acknowledged.'
-                        );
-
-                        // Check the topic again immediately
-                        // before making the claim.
                         const latestClaim =
                             getClaimedUserId(
                                 channel
@@ -1013,7 +933,7 @@ client.on(
                         if (
                             latestClaim &&
                             latestClaim !==
-                            interaction.user.id &&
+                            userId &&
                             !isSenior
                         ) {
 
@@ -1052,17 +972,9 @@ client.on(
                                 `CLAIMED-${newName}`;
                         }
 
-                        console.log(
-                            `[CLAIM] Setting channel name to ${newName}...`
-                        );
-
                         await channel.setName(
                             newName
                         );
-
-                        // ------------------------------------------
-                        // UPDATE CLAIM IN TOPIC
-                        // ------------------------------------------
 
                         let topic =
                             channel.topic || '';
@@ -1074,19 +986,11 @@ client.on(
                             );
 
                         topic +=
-                            `|claimed-by:${interaction.user.id}`;
-
-                        console.log(
-                            '[CLAIM] Updating topic...'
-                        );
+                            `|claimed-by:${userId}`;
 
                         await channel.setTopic(
                             topic
                         );
-
-                        // ------------------------------------------
-                        // CLAIM MESSAGE
-                        // ------------------------------------------
 
                         const claimText =
                             latestClaim &&
@@ -1094,7 +998,7 @@ client.on(
                                 ? `${ownerMention} | ${interaction.user} has taken over this ${ticketTypeName} ticket from <@${latestClaim}> as Senior Support.`
                                 : `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`;
 
-                        const claimContainer =
+                        const container =
                             new ContainerBuilder()
                                 .addTextDisplayComponents(
                                     new TextDisplayBuilder()
@@ -1103,11 +1007,11 @@ client.on(
                                         )
                                 );
 
-                        const mentionedUsers =
+                        const mentions =
                             [];
 
                         if (ownerId) {
-                            mentionedUsers.push(
+                            mentions.push(
                                 ownerId
                             );
                         }
@@ -1116,32 +1020,24 @@ client.on(
                             latestClaim &&
                             isSenior &&
                             latestClaim !==
-                            interaction.user.id
+                            userId
                         ) {
-                            mentionedUsers.push(
+                            mentions.push(
                                 latestClaim
                             );
                         }
 
-                        console.log(
-                            '[CLAIM] Sending claim message...'
-                        );
-
                         await channel.send({
                             components: [
-                                claimContainer
+                                container
                             ],
                             flags:
                                 MessageFlags.IsComponentsV2,
                             allowedMentions: {
                                 users:
-                                    mentionedUsers
+                                    mentions
                             }
                         });
-
-                        console.log(
-                            '[CLAIM] Claim message sent.'
-                        );
 
                         await interaction.editReply({
                             content:
@@ -1151,33 +1047,18 @@ client.on(
                                     : '✅ Ticket claimed.'
                         });
 
-                        console.log(
-                            '[CLAIM] COMPLETE.'
-                        );
-
                     } catch (error) {
 
                         console.error(
-                            '[CLAIM] ERROR:',
+                            '[CLAIM ERROR]',
                             error
                         );
 
                         try {
-                            if (
-                                interaction.deferred
-                            ) {
-                                await interaction.editReply({
-                                    content:
-                                        '❌ Something went wrong while claiming this ticket. The error has been logged.'
-                                });
-                            } else {
-                                await interaction.reply({
-                                    content:
-                                        '❌ Something went wrong while claiming this ticket.',
-                                    flags:
-                                        MessageFlags.Ephemeral
-                                });
-                            }
+                            await interaction.editReply({
+                                content:
+                                    '❌ Something went wrong while claiming this ticket.'
+                            });
                         } catch {}
                     }
 
@@ -1196,14 +1077,11 @@ client.on(
                     const channel =
                         interaction.channel;
 
-                    console.log(
-                        `[CLOSE] ${interaction.user.tag} clicked Close in ${channel?.id}`
-                    );
-
                     if (
                         !channel ||
                         !channel.isTextBased()
                     ) {
+
                         await interaction.reply({
                             content:
                                 '❌ This ticket channel could not be found.',
@@ -1214,25 +1092,20 @@ client.on(
                         return;
                     }
 
-                    const isSenior =
-                        isSeniorSupportMember(
-                            interaction.member
-                        );
-
                     const claimedBy =
                         getClaimedUserId(
                             channel
                         );
 
-                    console.log(
-                        `[CLOSE] Claimed by: ${claimedBy || 'none'}`
-                    );
+                    const isSenior =
+                        isSeniorSupportMember(
+                            interaction.member
+                        );
 
                     console.log(
-                        `[CLOSE] Is SSS: ${isSenior}`
+                        `[CLOSE] User=${interaction.user.id} ClaimedBy=${claimedBy || 'NONE'} Senior=${isSenior}`
                     );
 
-                    // Must be claimed.
                     if (!claimedBy) {
 
                         await interaction.reply({
@@ -1245,8 +1118,6 @@ client.on(
                         return;
                     }
 
-                    // SSS can close anything.
-                    // SS can only close their own.
                     if (
                         !isSenior &&
                         claimedBy !==
@@ -1267,10 +1138,6 @@ client.on(
 
                         await interaction.deferUpdate();
 
-                        console.log(
-                            '[CLOSE] Deleting channel...'
-                        );
-
                         await channel.delete(
                             'MSRP ticket closed'
                         );
@@ -1278,29 +1145,16 @@ client.on(
                     } catch (error) {
 
                         console.error(
-                            '[CLOSE] ERROR:',
+                            '[CLOSE ERROR]',
                             error
                         );
-
-                        try {
-                            if (
-                                interaction.deferred
-                            ) {
-                                await interaction.followUp({
-                                    content:
-                                        '❌ Something went wrong while closing this ticket.',
-                                    flags:
-                                        MessageFlags.Ephemeral
-                                });
-                            }
-                        } catch {}
                     }
 
                     return;
                 }
 
                 // ==================================================
-                // HAND OFF BUTTON
+                // HAND OFF
                 // ==================================================
 
                 if (
@@ -1308,36 +1162,17 @@ client.on(
                     'ticket_handoff'
                 ) {
 
-                    const member =
-                        interaction.member;
-
                     const channel =
                         interaction.channel;
-
-                    console.log(
-                        `[HANDOFF] ${interaction.user.tag} clicked Hand Off in ${channel?.id}`
-                    );
 
                     if (
                         !channel ||
                         !channel.isTextBased()
                     ) {
+
                         await interaction.reply({
                             content:
                                 '❌ This ticket channel could not be found.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-
-                        return;
-                    }
-
-                    if (
-                        !isSupportMember(member)
-                    ) {
-                        await interaction.reply({
-                            content:
-                                '❌ Only a support member can use this.',
                             flags:
                                 MessageFlags.Ephemeral
                         });
@@ -1350,21 +1185,18 @@ client.on(
                             channel
                         );
 
-                    console.log(
-                        `[HANDOFF] Claimed by: ${claimedBy || 'none'}`
-                    );
-
                     const isSenior =
                         isSeniorSupportMember(
-                            member
+                            interaction.member
                         );
 
                     console.log(
-                        `[HANDOFF] Is SSS: ${isSenior}`
+                        `[HANDOFF BUTTON] User=${interaction.user.id} ClaimedBy=${claimedBy || 'NONE'} Senior=${isSenior}`
                     );
 
-                    // Must be claimed.
-                    if (!claimedBy) {
+                    if (
+                        !claimedBy
+                    ) {
 
                         await interaction.reply({
                             content:
@@ -1376,8 +1208,6 @@ client.on(
                         return;
                     }
 
-                    // SSS can hand off anything.
-                    // SS can only hand off their own.
                     if (
                         !isSenior &&
                         claimedBy !==
@@ -1394,9 +1224,9 @@ client.on(
                         return;
                     }
 
-                    console.log(
-                        '[HANDOFF] Building modal...'
-                    );
+                    // ------------------------------------------
+                    // BUILD MODAL
+                    // ------------------------------------------
 
                     const modal =
                         new ModalBuilder()
@@ -1415,6 +1245,8 @@ client.on(
                             .setPlaceholder(
                                 'Select a destination...'
                             )
+                            .setMinValues(1)
+                            .setMaxValues(1)
                             .setRequired(true)
                             .addOptions(
 
@@ -1453,7 +1285,7 @@ client.on(
                             )
                     );
 
-                    const notesInput =
+                    const notes =
                         new TextInputBuilder()
                             .setCustomId(
                                 'handoff_notes'
@@ -1473,23 +1305,50 @@ client.on(
                                 'Notes (Optional)'
                             )
                             .setTextInputComponent(
-                                notesInput
+                                notes
                             )
                     );
 
                     console.log(
-                        '[HANDOFF] Showing modal...'
+                        '[HANDOFF BUTTON] Calling showModal...'
                     );
 
-                    // This is the interaction response.
-                    // Do NOT deferReply before this.
-                    await interaction.showModal(
-                        modal
-                    );
+                    try {
 
-                    console.log(
-                        '[HANDOFF] Modal shown.'
-                    );
+                        await interaction.showModal(
+                            modal
+                        );
+
+                        console.log(
+                            '[HANDOFF BUTTON] Modal displayed.'
+                        );
+
+                    } catch (error) {
+
+                        console.error(
+                            '[HANDOFF BUTTON ERROR]',
+                            error
+                        );
+
+                        // The interaction may not have been
+                        // acknowledged if showModal failed.
+                        try {
+
+                            if (
+                                !interaction.replied &&
+                                !interaction.deferred
+                            ) {
+
+                                await interaction.reply({
+                                    content:
+                                        '❌ Discord could not open the hand off form.',
+                                    flags:
+                                        MessageFlags.Ephemeral
+                                });
+                            }
+
+                        } catch {}
+                    }
 
                     return;
                 }
