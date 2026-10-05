@@ -40,10 +40,8 @@ function isSupportMember(member) {
 }
 
 function isSeniorSupportMember(member) {
-    return !!(
-        member?.roles?.cache?.has(
-            config.seniorSupportStaffRoleId
-        )
+    return !!member?.roles?.cache?.has(
+        config.seniorSupportStaffRoleId
     );
 }
 
@@ -76,16 +74,19 @@ function getTicketTypeName(channel) {
     return 'support';
 }
 
-function isClaimant(member, channel) {
+function isCurrentClaimant(member, channel) {
     const claimedBy = getClaimedUserId(channel);
 
-    return !!claimedBy && claimedBy === member?.user?.id;
+    return (
+        !!claimedBy &&
+        claimedBy === member?.user?.id
+    );
 }
 
-function isClaimantOrSenior(member, channel) {
+function canManageTicket(member, channel) {
     return (
-        isClaimant(member, channel) ||
-        isSeniorSupportMember(member)
+        isSeniorSupportMember(member) ||
+        isCurrentClaimant(member, channel)
     );
 }
 
@@ -111,16 +112,19 @@ client.once('clientReady', async () => {
 
         console.log('Slash commands registered.');
     } catch (error) {
-        console.error('Failed to register slash commands:', error);
+        console.error(
+            'Failed to register slash commands:',
+            error
+        );
     }
 });
 
 client.on('interactionCreate', async interaction => {
     try {
 
-        // ==============================
+        // ==========================================
         // SLASH COMMANDS
-        // ==============================
+        // ==========================================
 
         if (interaction.isChatInputCommand()) {
             if (
@@ -133,9 +137,9 @@ client.on('interactionCreate', async interaction => {
             return;
         }
 
-        // ==============================
-        // STRING SELECT MENUS
-        // ==============================
+        // ==========================================
+        // TICKET TYPE SELECT
+        // ==========================================
 
         if (interaction.isStringSelectMenu()) {
 
@@ -143,7 +147,9 @@ client.on('interactionCreate', async interaction => {
                 interaction.customId ===
                 'ticket_type_select'
             ) {
-                const ticketType = interaction.values[0];
+                const ticketType =
+                    interaction.values[0];
+
                 const typeConfig =
                     config.ticketTypes[ticketType];
 
@@ -151,49 +157,63 @@ client.on('interactionCreate', async interaction => {
                     await interaction.reply({
                         content:
                             '❌ This ticket type does not exist.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
-                const modal = new ModalBuilder()
-                    .setCustomId(
-                        `ticket_form:${ticketType}`
-                    )
-                    .setTitle(
-                        typeConfig.name ||
-                        typeConfig.label ||
-                        'Ticket'
-                    );
+                const modal =
+                    new ModalBuilder()
+                        .setCustomId(
+                            `ticket_form:${ticketType}`
+                        )
+                        .setTitle(
+                            typeConfig.name ||
+                            typeConfig.label ||
+                            'Ticket'
+                        );
 
                 for (
                     const question of
                     (typeConfig.questions || []).slice(0, 5)
                 ) {
 
-                    if (question.type === 'dropdown') {
-
+                    if (
+                        question.type ===
+                        'dropdown'
+                    ) {
                         const options =
-                            question.options.map(option => {
+                            question.options.map(
+                                option => {
 
-                                const builder =
-                                    new StringSelectMenuOptionBuilder()
-                                        .setLabel(option.label)
-                                        .setValue(option.value);
+                                    const builder =
+                                        new StringSelectMenuOptionBuilder()
+                                            .setLabel(
+                                                option.label
+                                            )
+                                            .setValue(
+                                                option.value
+                                            );
 
-                                if (option.description) {
-                                    builder.setDescription(
+                                    if (
                                         option.description
-                                    );
-                                }
+                                    ) {
+                                        builder.setDescription(
+                                            option.description
+                                        );
+                                    }
 
-                                return builder;
-                            });
+                                    return builder;
+                                }
+                            );
 
                         const select =
                             new StringSelectMenuBuilder()
-                                .setCustomId(question.id)
+                                .setCustomId(
+                                    question.id
+                                )
                                 .setPlaceholder(
                                     question.placeholder ||
                                     'Select an option...'
@@ -201,13 +221,18 @@ client.on('interactionCreate', async interaction => {
                                 .setMinValues(1)
                                 .setMaxValues(1)
                                 .setRequired(
-                                    question.required ?? true
+                                    question.required ??
+                                    true
                                 )
-                                .addOptions(options);
+                                .addOptions(
+                                    options
+                                );
 
                         modal.addLabelComponents(
                             new LabelBuilder()
-                                .setLabel(question.label)
+                                .setLabel(
+                                    question.label
+                                )
                                 .setStringSelectMenuComponent(
                                     select
                                 )
@@ -218,29 +243,40 @@ client.on('interactionCreate', async interaction => {
 
                     const input =
                         new TextInputBuilder()
-                            .setCustomId(question.id)
+                            .setCustomId(
+                                question.id
+                            )
                             .setStyle(
                                 question.style === 'Short'
                                     ? TextInputStyle.Short
                                     : TextInputStyle.Paragraph
                             )
                             .setRequired(
-                                question.required ?? true
+                                question.required ??
+                                true
                             );
 
-                    if (question.placeholder) {
+                    if (
+                        question.placeholder
+                    ) {
                         input.setPlaceholder(
                             question.placeholder
                         );
                     }
 
-                    if (question.minLength !== undefined) {
+                    if (
+                        question.minLength !==
+                        undefined
+                    ) {
                         input.setMinLength(
                             question.minLength
                         );
                     }
 
-                    if (question.maxLength !== undefined) {
+                    if (
+                        question.maxLength !==
+                        undefined
+                    ) {
                         input.setMaxLength(
                             question.maxLength
                         );
@@ -248,8 +284,12 @@ client.on('interactionCreate', async interaction => {
 
                     modal.addLabelComponents(
                         new LabelBuilder()
-                            .setLabel(question.label)
-                            .setTextInputComponent(input)
+                            .setLabel(
+                                question.label
+                            )
+                            .setTextInputComponent(
+                                input
+                            )
                     );
                 }
 
@@ -258,21 +298,26 @@ client.on('interactionCreate', async interaction => {
             }
         }
 
-        // ==============================
+        // ==========================================
         // MODALS
-        // ==============================
+        // ==========================================
 
         if (interaction.isModalSubmit()) {
 
-            // ------------------------------
+            // ==========================================
             // HAND OFF MODAL
-            // ------------------------------
+            // ==========================================
 
             if (
                 interaction.customId ===
                 'ticket_handoff_modal'
             ) {
-                const channel = interaction.channel;
+                const channel =
+                    interaction.channel;
+
+                console.log(
+                    `[HANDOFF] Modal submitted in ${channel?.id}`
+                );
 
                 if (
                     !channel ||
@@ -281,7 +326,8 @@ client.on('interactionCreate', async interaction => {
                     await interaction.reply({
                         content:
                             '❌ This ticket channel could not be found.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
@@ -295,22 +341,24 @@ client.on('interactionCreate', async interaction => {
                     await interaction.reply({
                         content:
                             '❌ Only a support member can use this.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
                 if (
-                    !isClaimant(
+                    !canManageTicket(
                         interaction.member,
                         channel
                     )
                 ) {
                     await interaction.reply({
                         content:
-                            '❌ Only the staff member who currently has this ticket claimed can hand it off.',
-                        flags: MessageFlags.Ephemeral
+                            '❌ Only the staff member who claimed this ticket or Senior Support Staff can hand it off.',
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
@@ -323,18 +371,27 @@ client.on('interactionCreate', async interaction => {
                     await interaction.reply({
                         content:
                             '❌ This ticket must be claimed before it can be handed off.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
-                // Acknowledge immediately.
+                console.log(
+                    '[HANDOFF] Acknowledging modal...'
+                );
+
                 await interaction.deferReply({
-                    flags: MessageFlags.Ephemeral
+                    flags:
+                        MessageFlags.Ephemeral
                 });
 
                 try {
+                    console.log(
+                        '[HANDOFF] Reading destination...'
+                    );
+
                     const selected =
                         interaction.fields
                             .getStringSelectValues(
@@ -366,23 +423,35 @@ client.on('interactionCreate', async interaction => {
                     let newCategoryId;
                     let destinationName;
 
-                    if (selected === 'reports_appeals') {
+                    if (
+                        selected ===
+                        'reports_appeals'
+                    ) {
                         newCategoryId =
-                            config.reportsAppealsTicketCategoryId;
+                            config
+                                .reportsAppealsTicketCategoryId;
 
                         destinationName =
                             'Reports & Appeals Tickets';
 
-                    } else if (selected === 'support') {
+                    } else if (
+                        selected ===
+                        'support'
+                    ) {
                         newCategoryId =
-                            config.supportTicketCategoryId;
+                            config
+                                .supportTicketCategoryId;
 
                         destinationName =
                             'Support Tickets';
 
-                    } else if (selected === 'senior') {
+                    } else if (
+                        selected ===
+                        'senior'
+                    ) {
                         newCategoryId =
-                            config.seniorTicketCategoryId;
+                            config
+                                .seniorTicketCategoryId;
 
                         destinationName =
                             'Senior Support Tickets';
@@ -396,6 +465,10 @@ client.on('interactionCreate', async interaction => {
                         return;
                     }
 
+                    console.log(
+                        '[HANDOFF] Removing CLAIMED from channel name...'
+                    );
+
                     const newChannelName =
                         channel.name.replace(
                             /^CLAIMED-/i,
@@ -406,11 +479,23 @@ client.on('interactionCreate', async interaction => {
                         newChannelName
                     );
 
+                    console.log(
+                        '[HANDOFF] Channel name updated.'
+                    );
+
+                    console.log(
+                        '[HANDOFF] Moving category...'
+                    );
+
                     await channel.setParent(
                         newCategoryId,
                         {
                             lockPermissions: false
                         }
+                    );
+
+                    console.log(
+                        '[HANDOFF] Category updated.'
                     );
 
                     const updatedTopic =
@@ -420,8 +505,16 @@ client.on('interactionCreate', async interaction => {
                                 ''
                             );
 
+                    console.log(
+                        '[HANDOFF] Removing claim from topic...'
+                    );
+
                     await channel.setTopic(
                         updatedTopic
+                    );
+
+                    console.log(
+                        '[HANDOFF] Topic updated.'
                     );
 
                     const ownerId =
@@ -441,7 +534,10 @@ client.on('interactionCreate', async interaction => {
                         const formattedNotes =
                             notes
                                 .split('\n')
-                                .map(line => `> ${line}`)
+                                .map(
+                                    line =>
+                                        `> ${line}`
+                                )
                                 .join('\n');
 
                         handoffMessage +=
@@ -459,6 +555,10 @@ client.on('interactionCreate', async interaction => {
                                     )
                             );
 
+                    console.log(
+                        '[HANDOFF] Sending handoff message...'
+                    );
+
                     await channel.send({
                         components: [
                             handoffContainer
@@ -466,35 +566,46 @@ client.on('interactionCreate', async interaction => {
                         flags:
                             MessageFlags.IsComponentsV2,
                         allowedMentions: {
-                            users: ownerId
-                                ? [ownerId]
-                                : []
+                            users:
+                                ownerId
+                                    ? [ownerId]
+                                    : []
                         }
                     });
+
+                    console.log(
+                        '[HANDOFF] Message sent.'
+                    );
 
                     await interaction.editReply({
                         content:
                             '✅ Ticket handed off successfully.'
                     });
 
+                    console.log(
+                        '[HANDOFF] COMPLETE.'
+                    );
+
                 } catch (error) {
                     console.error(
-                        'HANDOFF ERROR:',
+                        '[HANDOFF] ERROR:',
                         error
                     );
 
-                    await interaction.editReply({
-                        content:
-                            '❌ Something went wrong while handing off this ticket. The error has been logged.'
-                    });
+                    try {
+                        await interaction.editReply({
+                            content:
+                                '❌ Something went wrong while handing off this ticket. The error has been logged.'
+                        });
+                    } catch {}
                 }
 
                 return;
             }
 
-            // ------------------------------
+            // ==========================================
             // NORMAL TICKET FORM
-            // ------------------------------
+            // ==========================================
 
             if (
                 interaction.customId.startsWith(
@@ -511,7 +622,8 @@ client.on('interactionCreate', async interaction => {
                     await interaction.reply({
                         content:
                             '❌ This ticket type does not exist.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
@@ -577,15 +689,15 @@ client.on('interactionCreate', async interaction => {
             }
         }
 
-        // ==============================
+        // ==========================================
         // BUTTONS
-        // ==============================
+        // ==========================================
 
         if (interaction.isButton()) {
 
-            // ------------------------------
+            // ==========================================
             // TICKET RULES
-            // ------------------------------
+            // ==========================================
 
             if (
                 interaction.customId ===
@@ -594,15 +706,16 @@ client.on('interactionCreate', async interaction => {
                 await interaction.reply({
                     content:
                         config.ticketRulesButton.message,
-                    flags: MessageFlags.Ephemeral
+                    flags:
+                        MessageFlags.Ephemeral
                 });
 
                 return;
             }
 
-            // ------------------------------
+            // ==========================================
             // INFORMATION
-            // ------------------------------
+            // ==========================================
 
             if (
                 interaction.customId ===
@@ -611,15 +724,16 @@ client.on('interactionCreate', async interaction => {
                 await interaction.reply({
                     content:
                         config.informationButton.message,
-                    flags: MessageFlags.Ephemeral
+                    flags:
+                        MessageFlags.Ephemeral
                 });
 
                 return;
             }
 
-            // ------------------------------
-            // TICKET TYPE BUTTONS
-            // ------------------------------
+            // ==========================================
+            // TICKET CREATION BUTTONS
+            // ==========================================
 
             if (
                 interaction.customId.startsWith(
@@ -666,9 +780,9 @@ client.on('interactionCreate', async interaction => {
                 return;
             }
 
-            // ------------------------------
+            // ==========================================
             // CLAIM
-            // ------------------------------
+            // ==========================================
 
             if (
                 interaction.customId ===
@@ -677,20 +791,25 @@ client.on('interactionCreate', async interaction => {
                 const member =
                     interaction.member;
 
+                const channel =
+                    interaction.channel;
+
+                console.log(
+                    `[CLAIM] ${interaction.user.tag} clicked Claim in ${channel?.id}`
+                );
+
                 if (
                     !isSupportMember(member)
                 ) {
                     await interaction.reply({
                         content:
                             '❌ Only a member of the MSRP support team can use this.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
-
-                const channel =
-                    interaction.channel;
 
                 if (
                     !channel ||
@@ -699,41 +818,40 @@ client.on('interactionCreate', async interaction => {
                     await interaction.reply({
                         content:
                             '❌ This ticket channel could not be found.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
                 const isSenior =
-                    isSeniorSupportMember(member);
+                    isSeniorSupportMember(
+                        member
+                    );
 
                 const alreadyClaimedBy =
-                    getClaimedUserId(channel);
+                    getClaimedUserId(
+                        channel
+                    );
+
+                console.log(
+                    `[CLAIM] Existing claimant: ${alreadyClaimedBy || 'none'}`
+                );
+
+                console.log(
+                    `[CLAIM] Is SSS: ${isSenior}`
+                );
 
                 if (
                     alreadyClaimedBy &&
                     !isSenior
                 ) {
-                    let claimedMention =
-                        `<@${alreadyClaimedBy}>`;
-
-                    try {
-                        const claimedMember =
-                            await interaction.guild.members.fetch(
-                                alreadyClaimedBy
-                            );
-
-                        if (claimedMember) {
-                            claimedMention =
-                                `${claimedMember}`;
-                        }
-                    } catch {}
-
                     await interaction.reply({
                         content:
-                            `❌ This ticket has already been claimed by ${claimedMention}.`,
-                        flags: MessageFlags.Ephemeral
+                            `❌ This ticket has already been claimed by <@${alreadyClaimedBy}>.`,
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
@@ -746,34 +864,54 @@ client.on('interactionCreate', async interaction => {
                     await interaction.reply({
                         content:
                             '❌ You have already claimed this ticket.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
                 if (
-                    claimLocks.has(channel.id)
+                    claimLocks.has(
+                        channel.id
+                    )
                 ) {
                     await interaction.reply({
                         content:
                             '❌ Someone else is already processing this ticket.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
-                claimLocks.add(channel.id);
+                claimLocks.add(
+                    channel.id
+                );
 
-                // Acknowledge immediately.
-                await interaction.deferReply({
-                    flags: MessageFlags.Ephemeral
-                });
+                console.log(
+                    '[CLAIM] Lock acquired.'
+                );
 
                 try {
+                    console.log(
+                        '[CLAIM] Acknowledging interaction...'
+                    );
+
+                    await interaction.deferReply({
+                        flags:
+                            MessageFlags.Ephemeral
+                    });
+
+                    console.log(
+                        '[CLAIM] Interaction acknowledged.'
+                    );
+
                     const latestClaim =
-                        getClaimedUserId(channel);
+                        getClaimedUserId(
+                            channel
+                        );
 
                     if (
                         latestClaim &&
@@ -788,7 +926,9 @@ client.on('interactionCreate', async interaction => {
                     }
 
                     const ownerId =
-                        getTicketOwnerId(channel);
+                        getTicketOwnerId(
+                            channel
+                        );
 
                     const ownerMention =
                         ownerId
@@ -796,7 +936,9 @@ client.on('interactionCreate', async interaction => {
                             : 'Customer';
 
                     const ticketTypeName =
-                        getTicketTypeName(channel);
+                        getTicketTypeName(
+                            channel
+                        );
 
                     let newName =
                         channel.name;
@@ -810,8 +952,16 @@ client.on('interactionCreate', async interaction => {
                             `CLAIMED-${newName}`;
                     }
 
+                    console.log(
+                        `[CLAIM] Setting channel name to ${newName}...`
+                    );
+
                     await channel.setName(
                         newName
+                    );
+
+                    console.log(
+                        '[CLAIM] Channel name updated.'
                     );
 
                     let topic =
@@ -826,8 +976,16 @@ client.on('interactionCreate', async interaction => {
                     topic +=
                         `|claimed-by:${interaction.user.id}`;
 
+                    console.log(
+                        '[CLAIM] Updating topic...'
+                    );
+
                     await channel.setTopic(
                         topic
+                    );
+
+                    console.log(
+                        '[CLAIM] Topic updated.'
                     );
 
                     const claimText =
@@ -862,6 +1020,10 @@ client.on('interactionCreate', async interaction => {
                         );
                     }
 
+                    console.log(
+                        '[CLAIM] Sending claim message...'
+                    );
+
                     await channel.send({
                         components: [
                             claimContainer
@@ -874,6 +1036,10 @@ client.on('interactionCreate', async interaction => {
                         }
                     });
 
+                    console.log(
+                        '[CLAIM] Claim message sent.'
+                    );
+
                     await interaction.editReply({
                         content:
                             latestClaim && isSenior
@@ -881,29 +1047,38 @@ client.on('interactionCreate', async interaction => {
                                 : '✅ Ticket claimed.'
                     });
 
+                    console.log(
+                        '[CLAIM] COMPLETE.'
+                    );
+
                 } catch (error) {
                     console.error(
-                        'CLAIM ERROR:',
+                        '[CLAIM] ERROR:',
                         error
                     );
 
-                    await interaction.editReply({
-                        content:
-                            '❌ Something went wrong while claiming this ticket. The error has been logged.'
-                    });
-
+                    try {
+                        await interaction.editReply({
+                            content:
+                                '❌ Something went wrong while claiming this ticket. The error has been logged.'
+                        });
+                    } catch {}
                 } finally {
                     claimLocks.delete(
                         channel.id
+                    );
+
+                    console.log(
+                        '[CLAIM] Lock released.'
                     );
                 }
 
                 return;
             }
 
-            // ------------------------------
+            // ==========================================
             // CLOSE
-            // ------------------------------
+            // ==========================================
 
             if (
                 interaction.customId ===
@@ -912,33 +1087,47 @@ client.on('interactionCreate', async interaction => {
                 const channel =
                     interaction.channel;
 
+                console.log(
+                    `[CLOSE] ${interaction.user.tag} clicked Close in ${channel?.id}`
+                );
+
                 if (!channel) {
                     await interaction.reply({
                         content:
                             '❌ This ticket channel could not be found.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
                 if (
-                    !isClaimant(
+                    !canManageTicket(
                         interaction.member,
                         channel
                     )
                 ) {
                     await interaction.reply({
                         content:
-                            '❌ Only the staff member who currently has this ticket claimed can close it.',
-                        flags: MessageFlags.Ephemeral
+                            '❌ Only the staff member who claimed this ticket or Senior Support Staff can close it.',
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
                 try {
+                    console.log(
+                        '[CLOSE] Acknowledging interaction...'
+                    );
+
                     await interaction.deferUpdate();
+
+                    console.log(
+                        '[CLOSE] Deleting channel...'
+                    );
 
                     await channel.delete(
                         'MSRP ticket closed'
@@ -946,12 +1135,14 @@ client.on('interactionCreate', async interaction => {
 
                 } catch (error) {
                     console.error(
-                        'CLOSE ERROR:',
+                        '[CLOSE] ERROR:',
                         error
                     );
 
                     try {
-                        if (interaction.deferred) {
+                        if (
+                            interaction.deferred
+                        ) {
                             await interaction.followUp({
                                 content:
                                     '❌ Something went wrong while closing this ticket.',
@@ -965,9 +1156,9 @@ client.on('interactionCreate', async interaction => {
                 return;
             }
 
-            // ------------------------------
+            // ==========================================
             // HAND OFF BUTTON
-            // ------------------------------
+            // ==========================================
 
             if (
                 interaction.customId ===
@@ -979,13 +1170,18 @@ client.on('interactionCreate', async interaction => {
                 const channel =
                     interaction.channel;
 
+                console.log(
+                    `[HANDOFF] ${interaction.user.tag} clicked Hand Off in ${channel?.id}`
+                );
+
                 if (
                     !isSupportMember(member)
                 ) {
                     await interaction.reply({
                         content:
                             '❌ Only a support member can use this.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
@@ -995,38 +1191,47 @@ client.on('interactionCreate', async interaction => {
                     await interaction.reply({
                         content:
                             '❌ This ticket channel could not be found.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
                 if (
-                    !isClaimant(
+                    !canManageTicket(
                         member,
                         channel
                     )
                 ) {
                     await interaction.reply({
                         content:
-                            '❌ Only the staff member who currently has this ticket claimed can hand it off.',
-                        flags: MessageFlags.Ephemeral
+                            '❌ Only the staff member who claimed this ticket or Senior Support Staff can hand it off.',
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
 
                 if (
-                    !getClaimedUserId(channel)
+                    !getClaimedUserId(
+                        channel
+                    )
                 ) {
                     await interaction.reply({
                         content:
                             '❌ This ticket must be claimed before it can be handed off.',
-                        flags: MessageFlags.Ephemeral
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
                     return;
                 }
+
+                console.log(
+                    '[HANDOFF] Building modal...'
+                );
 
                 const modal =
                     new ModalBuilder()
@@ -1107,8 +1312,16 @@ client.on('interactionCreate', async interaction => {
                         )
                 );
 
+                console.log(
+                    '[HANDOFF] Showing modal...'
+                );
+
                 await interaction.showModal(
                     modal
+                );
+
+                console.log(
+                    '[HANDOFF] Modal shown.'
                 );
 
                 return;
