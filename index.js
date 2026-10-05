@@ -396,18 +396,6 @@ client.on(
                             interaction.member
                         );
 
-                    console.log(
-                        `[HANDOFF MODAL] User: ${interaction.user.id}`
-                    );
-
-                    console.log(
-                        `[HANDOFF MODAL] Claimed by: ${claimedBy || 'NONE'}`
-                    );
-
-                    console.log(
-                        `[HANDOFF MODAL] Senior: ${isSenior}`
-                    );
-
                     if (
                         !isSupportMember(
                             interaction.member
@@ -465,15 +453,27 @@ client.on(
                                     'handoff_destination'
                                 )?.[0];
 
+                        if (!selected) {
+
+                            await interaction.editReply({
+                                content:
+                                    '❌ Please select a hand off destination.'
+                            });
+
+                            return;
+                        }
+
                         let notes = '';
 
                         try {
+
                             notes =
                                 interaction.fields
                                     .getTextInputValue(
                                         'handoff_notes'
                                     )
                                     ?.trim() || '';
+
                         } catch {}
 
                         let newCategoryId;
@@ -620,10 +620,12 @@ client.on(
                         );
 
                         try {
+
                             await interaction.editReply({
                                 content:
                                     '❌ Something went wrong while handing off this ticket.'
                             });
+
                         } catch {}
                     }
 
@@ -832,10 +834,6 @@ client.on(
                             interaction.member
                         );
 
-                    console.log(
-                        `[CLAIM] User=${userId} Senior=${isSenior} Channel=${channel?.id}`
-                    );
-
                     if (
                         !channel ||
                         !channel.isTextBased()
@@ -872,14 +870,6 @@ client.on(
                             channel
                         );
 
-                    console.log(
-                        `[CLAIM] ClaimedBy=${claimedBy || 'NONE'}`
-                    );
-
-                    // ------------------------------------------
-                    // SAME PERSON
-                    // ------------------------------------------
-
                     if (
                         claimedBy ===
                         userId
@@ -895,10 +885,6 @@ client.on(
                         return;
                     }
 
-                    // ------------------------------------------
-                    // SOMEONE ELSE
-                    // ------------------------------------------
-
                     if (
                         claimedBy &&
                         !isSenior
@@ -913,10 +899,6 @@ client.on(
 
                         return;
                     }
-
-                    // ------------------------------------------
-                    // CLAIM / TAKEOVER
-                    // ------------------------------------------
 
                     try {
 
@@ -968,6 +950,7 @@ client.on(
                                 'CLAIMED-'
                             )
                         ) {
+
                             newName =
                                 `CLAIMED-${newName}`;
                         }
@@ -1007,8 +990,7 @@ client.on(
                                         )
                                 );
 
-                        const mentions =
-                            [];
+                        const mentions = [];
 
                         if (ownerId) {
                             mentions.push(
@@ -1022,6 +1004,7 @@ client.on(
                             latestClaim !==
                             userId
                         ) {
+
                             mentions.push(
                                 latestClaim
                             );
@@ -1055,10 +1038,12 @@ client.on(
                         );
 
                         try {
+
                             await interaction.editReply({
                                 content:
                                     '❌ Something went wrong while claiming this ticket.'
                             });
+
                         } catch {}
                     }
 
@@ -1101,10 +1086,6 @@ client.on(
                         isSeniorSupportMember(
                             interaction.member
                         );
-
-                    console.log(
-                        `[CLOSE] User=${interaction.user.id} ClaimedBy=${claimedBy || 'NONE'} Senior=${isSenior}`
-                    );
 
                     if (!claimedBy) {
 
@@ -1180,6 +1161,10 @@ client.on(
                         return;
                     }
 
+                    // ------------------------------------------
+                    // READ CLAIM
+                    // ------------------------------------------
+
                     const claimedBy =
                         getClaimedUserId(
                             channel
@@ -1194,9 +1179,11 @@ client.on(
                         `[HANDOFF BUTTON] User=${interaction.user.id} ClaimedBy=${claimedBy || 'NONE'} Senior=${isSenior}`
                     );
 
-                    if (
-                        !claimedBy
-                    ) {
+                    // ------------------------------------------
+                    // PERMISSION CHECKS
+                    // ------------------------------------------
+
+                    if (!claimedBy) {
 
                         await interaction.reply({
                             content:
@@ -1225,13 +1212,13 @@ client.on(
                     }
 
                     // ------------------------------------------
-                    // BUILD MODAL
+                    // CREATE MODAL
                     // ------------------------------------------
 
                     const modal =
                         new ModalBuilder()
                             .setCustomId(
-                                'ticket_handoff_modal'
+                                `ticket_handoff_modal:${channel.id}`
                             )
                             .setTitle(
                                 'Hand Off Ticket'
@@ -1247,7 +1234,6 @@ client.on(
                             )
                             .setMinValues(1)
                             .setMaxValues(1)
-                            .setRequired(true)
                             .addOptions(
 
                                 new StringSelectMenuOptionBuilder()
@@ -1309,18 +1295,22 @@ client.on(
                             )
                     );
 
-                    console.log(
-                        '[HANDOFF BUTTON] Calling showModal...'
-                    );
+                    // ------------------------------------------
+                    // OPEN MODAL
+                    // ------------------------------------------
 
                     try {
+
+                        console.log(
+                            '[HANDOFF BUTTON] Showing modal...'
+                        );
 
                         await interaction.showModal(
                             modal
                         );
 
                         console.log(
-                            '[HANDOFF BUTTON] Modal displayed.'
+                            '[HANDOFF BUTTON] Modal shown.'
                         );
 
                     } catch (error) {
@@ -1330,14 +1320,16 @@ client.on(
                             error
                         );
 
-                        // The interaction may not have been
-                        // acknowledged if showModal failed.
-                        try {
+                        // At this point the button interaction
+                        // may already have been acknowledged.
+                        // Only reply if Discord still allows it.
 
-                            if (
-                                !interaction.replied &&
-                                !interaction.deferred
-                            ) {
+                        if (
+                            !interaction.replied &&
+                            !interaction.deferred
+                        ) {
+
+                            try {
 
                                 await interaction.reply({
                                     content:
@@ -1345,9 +1337,15 @@ client.on(
                                     flags:
                                         MessageFlags.Ephemeral
                                 });
-                            }
 
-                        } catch {}
+                            } catch (replyError) {
+
+                                console.error(
+                                    '[HANDOFF ERROR REPLY]',
+                                    replyError
+                                );
+                            }
+                        }
                     }
 
                     return;
