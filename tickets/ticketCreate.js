@@ -111,68 +111,78 @@ async function createTicket(interaction, ticketType, answers = {}) {
     // PERMISSIONS
     // ==========================================
 
-    const permissionOverwrites = [
+   const supportRole = await guild.roles.fetch(
+    config.supportStaffRoleId
+);
 
-        {
-            id: guild.roles.everyone.id,
+const seniorSupportRole = await guild.roles.fetch(
+    config.seniorSupportStaffRoleId
+);
 
-            deny: [
-                PermissionFlagsBits.ViewChannel
-            ]
-        },
+const reportsAppealsRole = await guild.roles.fetch(
+    config.reportsAppealsStaffRoleId
+);
 
-        {
-            id: user.id,
+if (
+    !supportRole ||
+    !seniorSupportRole ||
+    !reportsAppealsRole
+) {
+    throw new Error(
+        'One or more ticket staff roles could not be found.'
+    );
+}
 
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-            ]
-        },
-
-        {
-            id: config.supportStaffRoleId,
-
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-            ]
-        },
-
-        {
-            id: config.seniorSupportStaffRoleId,
-
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-            ]
-        },
-
-        {
-            id: config.reportsAppealsRoleId,
-
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-            ]
-        },
-
-        {
-            id: guild.members.me.id,
-
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory,
-                PermissionFlagsBits.ManageChannels,
-                PermissionFlagsBits.ManageMessages
-            ]
-        }
-    ];
+const permissionOverwrites = [
+    {
+        id: guild.roles.everyone.id,
+        deny: [
+            PermissionFlagsBits.ViewChannel
+        ]
+    },
+    {
+        id: user.id,
+        allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory
+        ]
+    },
+    {
+        id: supportRole.id,
+        allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory
+        ]
+    },
+    {
+        id: seniorSupportRole.id,
+        allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory
+        ]
+    },
+    {
+        id: reportsAppealsRole.id,
+        allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory
+        ]
+    },
+    {
+        id: guild.members.me.id,
+        allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageMessages
+        ]
+    }
+];
 
 
     // ==========================================
