@@ -32,12 +32,16 @@ async function createTicket(interaction, ticketType, answers = {}) {
         return;
     }
 
+
     // ==========================================
     // DETERMINE CATEGORY
     // ==========================================
 
-    const isSeniorTicket = typeConfig.category === 2;
-    const isReportsAppealsTicket = typeConfig.category === 3;
+    const isSeniorTicket =
+        typeConfig.category === 2;
+
+    const isReportsAppealsTicket =
+        typeConfig.category === 3;
 
     let categoryId;
 
@@ -111,78 +115,103 @@ async function createTicket(interaction, ticketType, answers = {}) {
     // PERMISSIONS
     // ==========================================
 
-   const supportRole = await guild.roles.fetch(
-    config.supportStaffRoleId
-);
+    const supportRole =
+        await guild.roles.fetch(
+            config.supportStaffRoleId
+        );
 
-const seniorSupportRole = await guild.roles.fetch(
-    config.seniorSupportStaffRoleId
-);
+    const seniorSupportRole =
+        await guild.roles.fetch(
+            config.seniorSupportStaffRoleId
+        );
 
-const reportsAppealsRole = await guild.roles.fetch(
-    config.reportsAppealsStaffRoleId
-);
+    const reportsAppealsRole =
+        await guild.roles.fetch(
+            config.reportsAppealsStaffRoleId
+        );
 
-if (
-    !supportRole ||
-    !seniorSupportRole ||
-    !reportsAppealsRole
-) {
-    throw new Error(
-        'One or more ticket staff roles could not be found.'
-    );
-}
 
-const permissionOverwrites = [
-    {
-        id: guild.roles.everyone.id,
-        deny: [
-            PermissionFlagsBits.ViewChannel
-        ]
-    },
-    {
-        id: user.id,
-        allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory
-        ]
-    },
-    {
-        id: supportRole.id,
-        allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory
-        ]
-    },
-    {
-        id: seniorSupportRole.id,
-        allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory
-        ]
-    },
-    {
-        id: reportsAppealsRole.id,
-        allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory
-        ]
-    },
-    {
-        id: guild.members.me.id,
-        allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.ManageChannels,
-            PermissionFlagsBits.ManageMessages
-        ]
+    if (
+        !supportRole ||
+        !seniorSupportRole ||
+        !reportsAppealsRole
+    ) {
+
+        throw new Error(
+            'One or more ticket staff roles could not be found.'
+        );
     }
-];
+
+
+    const permissionOverwrites = [
+
+        {
+            id:
+                guild.roles.everyone.id,
+
+            deny: [
+                PermissionFlagsBits.ViewChannel
+            ]
+        },
+
+        {
+            id:
+                user.id,
+
+            allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory
+            ]
+        },
+
+        {
+            id:
+                supportRole.id,
+
+            allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory
+            ]
+        },
+
+        {
+            id:
+                seniorSupportRole.id,
+
+            allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory
+            ]
+        },
+
+        {
+            id:
+                reportsAppealsRole.id,
+
+            allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory
+            ]
+        },
+
+        {
+            id:
+                guild.members.me.id,
+
+            allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory,
+                PermissionFlagsBits.ManageChannels,
+                PermissionFlagsBits.ManageMessages
+            ]
+        }
+
+    ];
 
 
     // ==========================================
@@ -198,6 +227,7 @@ const permissionOverwrites = [
                 )
         ).size + 1;
 
+
     const paddedNumber =
         String(ticketNumber).padStart(3, '0');
 
@@ -211,6 +241,7 @@ const permissionOverwrites = [
             .toLowerCase()
             .replace(/[^a-z0-9-]/g, '-');
 
+
     const channelName =
         `${ticketType}-${safeUsername}-${paddedNumber}`;
 
@@ -222,17 +253,21 @@ const permissionOverwrites = [
     const ticketChannel =
         await guild.channels.create({
 
-            name: channelName,
+            name:
+                channelName,
 
-            type: ChannelType.GuildText,
+            type:
+                ChannelType.GuildText,
 
-            parent: categoryId,
+            parent:
+                categoryId,
 
             topic:
                 `ticket-owner:${user.id}` +
                 `|ticket-type:${ticketType}`,
 
             permissionOverwrites
+
         });
 
 
@@ -247,23 +282,19 @@ const permissionOverwrites = [
 
         flags:
             MessageFlags.Ephemeral
+
     });
 
 
     // ==========================================
     // TOP NORMAL MESSAGE
     // ==========================================
-    //
-    // This is intentionally OUTSIDE the
-    // Components V2 container.
-    //
-    // Customer + correct department role.
-    //
 
     await ticketChannel.send({
 
         content:
             `${user} <@&${typeConfig.roleId}>`
+
     });
 
 
@@ -294,10 +325,6 @@ const permissionOverwrites = [
         }
 
 
-        // ==========================================
-        // GET DROPDOWN LABEL
-        // ==========================================
-
         if (
             question.type ===
             'dropdown'
@@ -309,6 +336,7 @@ const permissionOverwrites = [
                         option.value ===
                         answer
                 );
+
 
             if (selectedOption) {
 
@@ -323,6 +351,7 @@ const permissionOverwrites = [
             `**${question.label}**\n${answer}`
 
         );
+
     }
 
 
@@ -330,6 +359,53 @@ const permissionOverwrites = [
         responseLines.length > 0
             ? responseLines.join('\n\n')
             : 'No form responses were provided.';
+
+
+    // ==========================================
+    // TICKET CONTROL BUTTONS
+    // ==========================================
+
+    const ticketButtons =
+        new ActionRowBuilder()
+            .addComponents(
+
+                new ButtonBuilder()
+                    .setCustomId(
+                        'ticket_claim'
+                    )
+                    .setLabel(
+                        'Claim'
+                    )
+                    .setStyle(
+                        ButtonStyle.Success
+                    )
+                    .setEmoji('✓'),
+
+                new ButtonBuilder()
+                    .setCustomId(
+                        'ticket_close'
+                    )
+                    .setLabel(
+                        'Close'
+                    )
+                    .setStyle(
+                        ButtonStyle.Danger
+                    )
+                    .setEmoji('🔒'),
+
+                new ButtonBuilder()
+                    .setCustomId(
+                        'ticket_handoff'
+                    )
+                    .setLabel(
+                        'Hand Off'
+                    )
+                    .setStyle(
+                        ButtonStyle.Secondary
+                    )
+                    .setEmoji('↗')
+
+            );
 
 
     // ==========================================
@@ -355,6 +431,7 @@ const permissionOverwrites = [
                             )
 
                     )
+
             )
 
 
@@ -402,18 +479,20 @@ const permissionOverwrites = [
 
 
             // ==========================================
-            // FORM RESPONSES
+            // DETAILS HEADING + RESPONSES
             // ==========================================
 
-.addTextDisplayComponents(
+            .addTextDisplayComponents(
 
-    new TextDisplayBuilder()
-        .setContent(
-            '__**Details / Form Responses**__\n\n' +
-            responsesText
-        )
+                new TextDisplayBuilder()
+                    .setContent(
 
-)
+                        '__**Details & Information**__\n\n' +
+                        responsesText
+
+                    )
+
+            )
 
 
             // ==========================================
@@ -444,11 +523,20 @@ const permissionOverwrites = [
 
                     )
 
+            )
+
+
+            // ==========================================
+            // BUTTONS
+            // ==========================================
+
+            .addActionRowComponents(
+                ticketButtons
             );
 
 
     // ==========================================
-    // SEND WELCOME CONTAINER
+    // SEND EVERYTHING ONCE
     // ==========================================
 
     await ticketChannel.send({
@@ -489,133 +577,6 @@ const permissionOverwrites = [
 
         flags:
             MessageFlags.IsComponentsV2
-    });
-
-
-     // ==========================================
-    // TICKET CONTROL BUTTONS
-    // ==========================================
-
-    const ticketButtons =
-        new ActionRowBuilder()
-            .addComponents(
-
-                // ==========================================
-                // CLAIM
-                // ==========================================
-
-                new ButtonBuilder()
-                    .setCustomId(
-                        'ticket_claim'
-                    )
-                    .setLabel(
-                        'Claim'
-                    )
-                    .setStyle(
-                        ButtonStyle.Success
-                    )
-                    .setEmoji('✓'),
-
-
-                // ==========================================
-                // CLOSE
-                // ==========================================
-
-                new ButtonBuilder()
-                    .setCustomId(
-                        'ticket_close'
-                    )
-                    .setLabel(
-                        'Close'
-                    )
-                    .setStyle(
-                        ButtonStyle.Danger
-                    )
-                    .setEmoji('🔒'),
-
-
-                // ==========================================
-                // HAND OFF
-                // ==========================================
-
-                new ButtonBuilder()
-                    .setCustomId(
-                        'ticket_handoff'
-                    )
-                    .setLabel(
-                        'Hand Off'
-                    )
-                    .setStyle(
-                        ButtonStyle.Secondary
-                    )
-                    .setEmoji('↗')
-            );
-
-
-    // ==========================================
-    // ADD BUTTONS TO CONTAINER
-    // ==========================================
-
-    welcomeContainer
-        .addActionRowComponents(
-            ticketButtons
-        );
-
-
-    // ==========================================
-    // SEND WELCOME CONTAINER
-    // ==========================================
-
-    await ticketChannel.send({
-
-        components: [
-            welcomeContainer
-        ],
-
-        files: [
-
-            {
-                attachment:
-                    path.join(
-                        __dirname,
-                        '..',
-                        'images',
-                        'ticket-dashboard.png'
-                    ),
-
-                name:
-                    'ticket-dashboard.png'
-            },
-
-            {
-                attachment:
-                    path.join(
-                        __dirname,
-                        '..',
-                        'images',
-                        'image.png'
-                    ),
-
-                name:
-                    'image.png'
-            }
-
-        ],
-
-        flags:
-            MessageFlags.IsComponentsV2
-
-    });
-
-    // ==========================================
-    // SEND BUTTONS OUTSIDE CONTAINER
-    // ==========================================
-
-    await ticketChannel.send({
-
-        components: [
-            ticketButtons
-        ]
 
     });
 
