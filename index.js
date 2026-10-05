@@ -5,6 +5,7 @@ console.log('📦 Loading dotenv...');
 require('dotenv').config();
 
 console.log('✅ Dotenv loaded');
+
 console.log('📦 Loading discord.js...');
 
 const {
@@ -23,342 +24,1450 @@ const {
 
 console.log('✅ discord.js loaded');
 
-const ticketSetup = require('./tickets/ticketSetup');
-const { createTicket } = require('./tickets/ticketCreate');
 
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers
-    ]
-});
+const ticketSetup =
+    require('./tickets/ticketSetup');
 
-client.once('clientReady', async () => {
-    console.log(`✅ Logged in as ${client.user.tag}`);
-    console.log(`🤖 MSRP Bot is online!`);
+const {
+    createTicket
+} = require('./tickets/ticketCreate');
 
-    const rest = new REST({ version: '10' })
-        .setToken(process.env.DISCORD_TOKEN);
+const config =
+    require('./tickets/ticketConfig');
 
-    try {
-        await rest.put(
-            Routes.applicationGuildCommands(
-                client.user.id,
-                process.env.DISCORD_GUILD_ID
-            ),
-            {
-                body: [
-                    ticketSetup.command.toJSON()
-                ]
-            }
+
+// ==========================================
+// CLIENT
+// ==========================================
+
+const client =
+    new Client({
+
+        intents: [
+
+            GatewayIntentBits.Guilds,
+
+            GatewayIntentBits.GuildMembers
+
+        ]
+
+    });
+
+
+// ==========================================
+// SUPPORT ROLE CHECK
+// ==========================================
+
+function isSupportMember(member) {
+
+    if (
+        !member ||
+        !member.roles
+    ) {
+
+        return false;
+    }
+
+
+    return (
+
+        member.roles.cache.has(
+            config.supportStaffRoleId
+        ) ||
+
+        member.roles.cache.has(
+            config.seniorSupportStaffRoleId
+        ) ||
+
+        member.roles.cache.has(
+            config.reportsAppealsStaffRoleId
+        )
+
+    );
+}
+
+
+// ==========================================
+// SENIOR ROLE CHECK
+// ==========================================
+
+function isSeniorSupport(member) {
+
+    if (
+        !member ||
+        !member.roles
+    ) {
+
+        return false;
+    }
+
+
+    return member.roles.cache.has(
+        config.seniorSupportStaffRoleId
+    );
+}
+
+
+// ==========================================
+// GET TICKET OWNER
+// ==========================================
+
+function getTicketOwnerId(channel) {
+
+    const match =
+        channel.topic?.match(
+            /ticket-owner:(\d+)/
         );
 
-        console.log('✅ Slash commands registered!');
-    } catch (error) {
-        console.error('❌ Failed to register slash commands:', error);
-    }
-});
 
-client.on('interactionCreate', async (interaction) => {
-
-    // Slash commands
-    if (interaction.isChatInputCommand()) {
-
-       if (interaction.commandName === 'send-ticket-dashboard') {
-    await ticketSetup.execute(interaction);
-    return;
+    return match
+        ? match[1]
+        : null;
 }
 
-}
 
 // ==========================================
-// TICKET DROPDOWN
+// GET TICKET TYPE
 // ==========================================
 
-// TICKET TYPE SELECTION
-if (interaction.isStringSelectMenu()) {
+function getTicketType(channel) {
 
-    if (interaction.customId === 'ticket_type_select') {
-
-        const ticketType = interaction.values[0];
-
-        const config = require('./tickets/ticketConfig');
-        const typeConfig = config.ticketTypes[ticketType];
-
-        if (!typeConfig) {
-            await interaction.reply({
-                content: '❌ This ticket type does not exist.',
-                flags: MessageFlags.Ephemeral
-            });
-
-            return;
-        }
-
-        const questions = typeConfig.questions || [];
-
-        const modal = new ModalBuilder()
-            .setCustomId(`ticket_form:${ticketType}`)
-            .setTitle(typeConfig.name);
-
-        for (const question of questions.slice(0, 5)) {
-
-            // ==========================================
-            // DROPDOWN QUESTION
-            // ==========================================
-
-            if (question.type === 'dropdown') {
-const options = question.options.map(option => {
-
-    const builder = new StringSelectMenuOptionBuilder()
-        .setLabel(option.label)
-        .setValue(option.value);
-
-    if (option.description) {
-        builder.setDescription(option.description);
-    }
-
-    return builder;
-});
-
-const select = new StringSelectMenuBuilder()
-    .setCustomId(question.id)
-    .setPlaceholder(
-        question.placeholder || 'Select an option...'
-    )
-    .setMinValues(1)
-    .setMaxValues(1)
-    .setRequired(question.required ?? true)
-    .addOptions(options);
-
-                const label = new LabelBuilder()
-                    .setLabel(question.label)
-                    .setStringSelectMenuComponent(select);
-
-                modal.addLabelComponents(label);
-
-                continue;
-            }
+    const match =
+        channel.topic?.match(
+            /ticket-type:([^|]+)/
+        );
 
 
-            // ==========================================
-            // TEXT QUESTION
-            // ==========================================
-
-            const input = new TextInputBuilder()
-                .setCustomId(question.id)
-                .setStyle(
-                    question.style === 'Short'
-                        ? TextInputStyle.Short
-                        : TextInputStyle.Paragraph
-                )
-                .setRequired(question.required ?? true);
-
-            if (question.placeholder) {
-                input.setPlaceholder(question.placeholder);
-            }
-
-            if (question.minLength !== undefined) {
-                input.setMinLength(question.minLength);
-            }
-
-            if (question.maxLength !== undefined) {
-                input.setMaxLength(question.maxLength);
-            }
-
-            const label = new LabelBuilder()
-                .setLabel(question.label)
-                .setTextInputComponent(input);
-
-            modal.addLabelComponents(label);
-        }
-
-        await interaction.showModal(modal);
-
-        return;
-    }
+    return match
+        ? match[1]
+        : null;
 }
 
 
-// TICKET FORM SUBMISSION
-if (interaction.isModalSubmit()) {
+// ==========================================
+// GET CLAIMED USER
+// ==========================================
 
-    if (interaction.customId.startsWith('ticket_form:')) {
+function getClaimedUserId(channel) {
 
-        const ticketType =
-            interaction.customId.split(':')[1];
+    const match =
+        channel.topic?.match(
+            /claimed-by:(\d+)/
+        );
 
-        const config =
-            require('./tickets/ticketConfig');
 
-        const typeConfig =
-            config.ticketTypes[ticketType];
+    return match
+        ? match[1]
+        : null;
+}
 
-        if (!typeConfig) {
 
-            await interaction.reply({
-                content:
-                    '❌ This ticket type does not exist.',
-                flags: MessageFlags.Ephemeral
-            });
+// ==========================================
+// GET TICKET TYPE NAME
+// ==========================================
 
-            return;
+function getTicketTypeName(channel) {
+
+    const ticketType =
+        getTicketType(channel);
+
+
+    if (
+        ticketType &&
+        config.ticketTypes[ticketType]
+    ) {
+
+        return config.ticketTypes[
+            ticketType
+        ].name;
+    }
+
+
+    return 'support';
+}
+
+
+// ==========================================
+// BOT READY
+// ==========================================
+
+client.once(
+    'clientReady',
+    async () => {
+
+        console.log(
+            `✅ Logged in as ${client.user.tag}`
+        );
+
+        console.log(
+            `🤖 MSRP Bot is online!`
+        );
+
+
+        const rest =
+            new REST({
+                version: '10'
+            })
+            .setToken(
+                process.env.DISCORD_TOKEN
+            );
+
+
+        try {
+
+            await rest.put(
+
+                Routes.applicationGuildCommands(
+
+                    client.user.id,
+
+                    process.env.DISCORD_GUILD_ID
+
+                ),
+
+                {
+
+                    body: [
+
+                        ticketSetup
+                            .command
+                            .toJSON()
+
+                    ]
+
+                }
+
+            );
+
+
+            console.log(
+                '✅ Slash commands registered!'
+            );
+
+
+        } catch (error) {
+
+            console.error(
+
+                '❌ Failed to register slash commands:',
+
+                error
+
+            );
         }
 
-        const answers = {};
+    }
+);
+
+
+// ==========================================
+// INTERACTION HANDLER
+// ==========================================
+
+client.on(
+    'interactionCreate',
+    async interaction => {
+
 
         // ==========================================
-        // COLLECT ALL QUESTIONS
+        // SLASH COMMANDS
         // ==========================================
 
-        for (const question of typeConfig.questions || []) {
+        if (
+            interaction.isChatInputCommand()
+        ) {
 
-            try {
+            if (
+                interaction.commandName ===
+                'send-ticket-dashboard'
+            ) {
 
-                if (question.type === 'dropdown') {
+                await ticketSetup.execute(
+                    interaction
+                );
 
-                    const values =
-                        interaction.fields.getStringSelectValues(
-                            question.id
+                return;
+            }
+        }
+
+
+        // ==========================================
+        // STRING SELECT MENUS
+        // ==========================================
+
+        if (
+            interaction.isStringSelectMenu()
+        ) {
+
+
+            // ==========================================
+            // TICKET TYPE DROPDOWN
+            // ==========================================
+
+            if (
+                interaction.customId ===
+                'ticket_type_select'
+            ) {
+
+                const ticketType =
+                    interaction.values[0];
+
+
+                const typeConfig =
+                    config.ticketTypes[
+                        ticketType
+                    ];
+
+
+                if (!typeConfig) {
+
+                    await interaction.reply({
+
+                        content:
+                            '❌ This ticket type does not exist.',
+
+                        flags:
+                            MessageFlags.Ephemeral
+
+                    });
+
+                    return;
+                }
+
+
+                const questions =
+                    typeConfig.questions ||
+                    [];
+
+
+                const modal =
+                    new ModalBuilder()
+
+                        .setCustomId(
+                            `ticket_form:${ticketType}`
+                        )
+
+                        .setTitle(
+                            typeConfig.name
                         );
 
-                    answers[question.id] =
-                        values[0];
+
+                // ==========================================
+                // ADD QUESTIONS
+                // ==========================================
+
+                for (
+                    const question of
+                    questions.slice(0, 5)
+                ) {
+
+
+                    // ==========================================
+                    // DROPDOWN QUESTION
+                    // ==========================================
+
+                    if (
+                        question.type ===
+                        'dropdown'
+                    ) {
+
+                        const options =
+                            question.options.map(
+                                option => {
+
+                                    const builder =
+                                        new StringSelectMenuOptionBuilder()
+
+                                            .setLabel(
+                                                option.label
+                                            )
+
+                                            .setValue(
+                                                option.value
+                                            );
+
+
+                                    if (
+                                        option.description
+                                    ) {
+
+                                        builder.setDescription(
+                                            option.description
+                                        );
+
+                                    }
+
+
+                                    return builder;
+
+                                }
+                            );
+
+
+                        const select =
+                            new StringSelectMenuBuilder()
+
+                                .setCustomId(
+                                    question.id
+                                )
+
+                                .setPlaceholder(
+                                    question.placeholder ||
+                                    'Select an option...'
+                                )
+
+                                .setMinValues(1)
+
+                                .setMaxValues(1)
+
+                                .setRequired(
+                                    question.required ??
+                                    true
+                                )
+
+                                .addOptions(
+                                    options
+                                );
+
+
+                        const label =
+                            new LabelBuilder()
+
+                                .setLabel(
+                                    question.label
+                                )
+
+                                .setStringSelectMenuComponent(
+                                    select
+                                );
+
+
+                        modal.addLabelComponents(
+                            label
+                        );
+
+
+                        continue;
+                    }
+
+
+                    // ==========================================
+                    // TEXT QUESTION
+                    // ==========================================
+
+                    const input =
+                        new TextInputBuilder()
+
+                            .setCustomId(
+                                question.id
+                            )
+
+                            .setStyle(
+
+                                question.style ===
+                                'Short'
+
+                                    ? TextInputStyle.Short
+
+                                    : TextInputStyle.Paragraph
+
+                            )
+
+                            .setRequired(
+                                question.required ??
+                                true
+                            );
+
+
+                    if (
+                        question.placeholder
+                    ) {
+
+                        input.setPlaceholder(
+                            question.placeholder
+                        );
+
+                    }
+
+
+                    if (
+                        question.minLength !==
+                        undefined
+                    ) {
+
+                        input.setMinLength(
+                            question.minLength
+                        );
+
+                    }
+
+
+                    if (
+                        question.maxLength !==
+                        undefined
+                    ) {
+
+                        input.setMaxLength(
+                            question.maxLength
+                        );
+
+                    }
+
+
+                    const label =
+                        new LabelBuilder()
+
+                            .setLabel(
+                                question.label
+                            )
+
+                            .setTextInputComponent(
+                                input
+                            );
+
+
+                    modal.addLabelComponents(
+                        label
+                    );
+
+                }
+
+
+                await interaction.showModal(
+                    modal
+                );
+
+                return;
+            }
+
+        }
+
+
+        // ==========================================
+        // MODALS
+        // ==========================================
+
+        if (
+            interaction.isModalSubmit()
+        ) {
+
+
+            // ==========================================
+            // HAND OFF MODAL
+            // ==========================================
+
+            if (
+                interaction.customId ===
+                'ticket_handoff_modal'
+            ) {
+
+                const channel =
+                    interaction.channel;
+
+
+                // ==========================================
+                // CHECK SUPPORT
+                // ==========================================
+
+                if (
+                    !isSupportMember(
+                        interaction.member
+                    )
+                ) {
+
+                    await interaction.reply({
+
+                        content:
+                            'Only a support member can use this. The ticket must be claimed before using this.',
+
+                        flags:
+                            MessageFlags.Ephemeral
+
+                    });
+
+                    return;
+                }
+
+
+                // ==========================================
+                // CHECK CLAIMED
+                // ==========================================
+
+                const claimedBy =
+                    getClaimedUserId(
+                        channel
+                    );
+
+
+                if (!claimedBy) {
+
+                    await interaction.reply({
+
+                        content:
+                            'Only a support member can use this. The ticket must be claimed before using this.',
+
+                        flags:
+                            MessageFlags.Ephemeral
+
+                    });
+
+                    return;
+                }
+
+
+                // ==========================================
+                // GET SELECTION
+                // ==========================================
+
+                const selected =
+                    interaction.fields
+                        .getStringSelectValues(
+                            'handoff_destination'
+                        )[0];
+
+
+                // ==========================================
+                // DETERMINE DESTINATION
+                // ==========================================
+
+                let newCategoryId;
+
+                let destinationName;
+
+
+                if (
+                    selected ===
+                    'reports_appeals'
+                ) {
+
+                    newCategoryId =
+                        config
+                            .reportsAppealsTicketCategoryId;
+
+                    destinationName =
+                        'Reports & Appeals Tickets';
+
+
+                } else if (
+                    selected ===
+                    'support'
+                ) {
+
+                    newCategoryId =
+                        config
+                            .supportTicketCategoryId;
+
+                    destinationName =
+                        'Support Tickets';
+
+
+                } else if (
+                    selected ===
+                    'senior'
+                ) {
+
+                    newCategoryId =
+                        config
+                            .seniorTicketCategoryId;
+
+                    destinationName =
+                        'Senior Support Tickets';
+
 
                 } else {
 
-                    answers[question.id] =
-                        interaction.fields.getTextInputValue(
-                            question.id
-                        );
+                    await interaction.reply({
+
+                        content:
+                            '❌ Invalid hand off destination.',
+
+                        flags:
+                            MessageFlags.Ephemeral
+
+                    });
+
+                    return;
                 }
 
-            } catch (error) {
 
-                console.error(
-                    `❌ Failed to collect question "${question.id}":`,
-                    error
+                // ==========================================
+                // REMOVE CLAIMED FROM NAME
+                // ==========================================
+
+                const newChannelName =
+                    channel.name.replace(
+                        /^CLAIMED-/i,
+                        ''
+                    );
+
+
+                await channel.setName(
+                    newChannelName
                 );
 
+
+                // ==========================================
+                // MOVE CATEGORY
+                // ==========================================
+
+                await channel.setParent(
+                    newCategoryId,
+                    {
+                        lockPermissions: false
+                    }
+                );
+
+
+                // ==========================================
+                // REMOVE CLAIMED FROM TOPIC
+                // ==========================================
+
+                const updatedTopic =
+                    (channel.topic || '')
+                        .replace(
+                            /\|claimed-by:\d+/,
+                            ''
+                        );
+
+
+                await channel.setTopic(
+                    updatedTopic
+                );
+
+
+                // ==========================================
+                // CUSTOMER
+                // ==========================================
+
+                const ownerId =
+                    getTicketOwnerId(
+                        channel
+                    );
+
+
+                const ownerMention =
+                    ownerId
+                        ? `<@${ownerId}>`
+                        : 'Customer';
+
+
+                // ==========================================
+                // HAND OFF MESSAGE
+                // ==========================================
+
+                const handoffContainer =
+                    new (
+                        require('discord.js')
+                            .ContainerBuilder
+                    )
+
+                        .addTextDisplayComponents(
+
+                            new (
+                                require('discord.js')
+                                    .TextDisplayBuilder
+                            )
+
+                                .setContent(
+
+                                    `${ownerMention} | This ticket has been handed to ${destinationName}, a support member will be with you shortly`
+
+                                )
+
+                        );
+
+
+                await channel.send({
+
+                    components: [
+                        handoffContainer
+                    ],
+
+                    flags:
+                        MessageFlags.IsComponentsV2
+
+                });
+
+
+                await interaction.reply({
+
+                    content:
+                        '✅ Ticket handed off successfully.',
+
+                    flags:
+                        MessageFlags.Ephemeral
+
+                });
+
+
+                return;
             }
+
+
+            // ==========================================
+            // NORMAL TICKET FORM
+            // ==========================================
+
+            if (
+                interaction.customId.startsWith(
+                    'ticket_form:'
+                )
+            ) {
+
+                const ticketType =
+                    interaction.customId
+                        .split(':')[1];
+
+
+                const typeConfig =
+                    config.ticketTypes[
+                        ticketType
+                    ];
+
+
+                if (!typeConfig) {
+
+                    await interaction.reply({
+
+                        content:
+                            '❌ This ticket type does not exist.',
+
+                        flags:
+                            MessageFlags.Ephemeral
+
+                    });
+
+                    return;
+                }
+
+
+                const answers = {};
+
+
+                // ==========================================
+                // COLLECT ANSWERS
+                // ==========================================
+
+                for (
+                    const question of
+                    typeConfig.questions || []
+                ) {
+
+                    try {
+
+                        if (
+                            question.type ===
+                            'dropdown'
+                        ) {
+
+                            const values =
+                                interaction.fields
+                                    .getStringSelectValues(
+                                        question.id
+                                    );
+
+
+                            answers[
+                                question.id
+                            ] =
+                                values[0];
+
+
+                        } else {
+
+                            answers[
+                                question.id
+                            ] =
+                                interaction.fields
+                                    .getTextInputValue(
+                                        question.id
+                                    );
+
+                        }
+
+                    } catch (error) {
+
+                        console.error(
+
+                            `❌ Failed to collect question "${question.id}":`,
+
+                            error
+
+                        );
+
+                    }
+
+                }
+
+
+                // ==========================================
+                // CREATE TICKET
+                // ==========================================
+
+                try {
+
+                    await createTicket(
+
+                        interaction,
+
+                        ticketType,
+
+                        answers
+
+                    );
+
+
+                } catch (error) {
+
+                    console.error(
+
+                        '❌ Ticket form submission error:',
+
+                        error
+
+                    );
+
+
+                    if (
+                        !interaction.replied &&
+                        !interaction.deferred
+                    ) {
+
+                        await interaction.reply({
+
+                            content:
+                                '❌ Something went wrong while creating your ticket.',
+
+                            flags:
+                                MessageFlags.Ephemeral
+
+                        });
+
+                    }
+
+                }
+
+
+                return;
+            }
+
         }
 
 
         // ==========================================
-        // CREATE TICKET
+        // BUTTONS
         // ==========================================
 
-        try {
+        if (
+            interaction.isButton()
+        ) {
 
-            await createTicket(
-                interaction,
-                ticketType,
-                answers
-            );
 
-        } catch (error) {
-
-            console.error(
-                '❌ Ticket form submission error:',
-                error
-            );
+            // ==========================================
+            // TICKET RULES
+            // ==========================================
 
             if (
-                !interaction.replied &&
-                !interaction.deferred
+                interaction.customId ===
+                'ticket_rules'
             ) {
 
                 await interaction.reply({
+
                     content:
-                        '❌ Something went wrong while creating your ticket.',
-                    flags: MessageFlags.Ephemeral
+                        config
+                            .ticketRulesButton
+                            .message,
+
+                    flags:
+                        MessageFlags.Ephemeral
+
                 });
 
+                return;
             }
 
-        }
 
-        return;
-    }
-}
+            // ==========================================
+            // INFORMATION
+            // ==========================================
 
-
-    // Ticket buttons
-    if (interaction.isButton()) {
-
-// ==========================================
-// TICKET RULES
-// ==========================================
-
-if (interaction.customId === 'ticket_rules') {
-
-    await interaction.reply({
-        content: require('./tickets/ticketConfig').ticketRulesButton.message,
-        flags: MessageFlags.Ephemeral
-    });
-
-    return;
-}
-
-
-// ==========================================
-// INFORMATION
-// ==========================================
-
-if (interaction.customId === 'ticket_information') {
-
-    await interaction.reply({
-        content: require('./tickets/ticketConfig').informationButton.message,
-        flags: MessageFlags.Ephemeral
-    });
-
-    return;
-}
-
-
-    // ==========================================
-    // TICKET TYPES
-    // ==========================================
-
-    if (interaction.customId.startsWith('ticket_')) {
-
-        const ticketType = interaction.customId.replace(
-            'ticket_',
-            ''
-        );
-
-        try {
-
-            await createTicket(
-                interaction,
-                ticketType
-            );
-
-        } catch (error) {
-
-            console.error(
-                '❌ Ticket creation error:',
-                error
-            );
-
-            if (!interaction.replied && !interaction.deferred) {
+            if (
+                interaction.customId ===
+                'ticket_information'
+            ) {
 
                 await interaction.reply({
+
                     content:
-                        '❌ Something went wrong while creating your ticket.',
-                    ephemeral: true
+                        config
+                            .informationButton
+                            .message,
+
+                    flags:
+                        MessageFlags.Ephemeral
+
                 });
 
+                return;
+            }
+
+
+            // ==========================================
+            // TICKET TYPE BUTTONS
+            // ==========================================
+
+            if (
+                interaction.customId.startsWith(
+                    'ticket_'
+                ) &&
+
+                ![
+                    'ticket_claim',
+                    'ticket_close',
+                    'ticket_handoff'
+                ].includes(
+                    interaction.customId
+                )
+            ) {
+
+                const ticketType =
+                    interaction.customId.replace(
+                        'ticket_',
+                        ''
+                    );
+
+
+                try {
+
+                    await createTicket(
+
+                        interaction,
+
+                        ticketType
+
+                    );
+
+
+                } catch (error) {
+
+                    console.error(
+
+                        '❌ Ticket creation error:',
+
+                        error
+
+                    );
+
+
+                    if (
+                        !interaction.replied &&
+                        !interaction.deferred
+                    ) {
+
+                        await interaction.reply({
+
+                            content:
+                                '❌ Something went wrong while creating your ticket.',
+
+                            flags:
+                                MessageFlags.Ephemeral
+
+                        });
+
+                    }
+
+                }
+
+
+                return;
+            }
+
+
+            // ==========================================
+            // CLAIM
+            // ==========================================
+
+            if (
+                interaction.customId ===
+                'ticket_claim'
+            ) {
+
+                const member =
+                    interaction.member;
+
+
+                // ==========================================
+                // CHECK SUPPORT ROLE
+                // ==========================================
+
+                if (
+                    !isSupportMember(
+                        member
+                    )
+                ) {
+
+                    await interaction.reply({
+
+                        content:
+                            'Only a member of the MSRP support team can use this',
+
+                        flags:
+                            MessageFlags.Ephemeral
+
+                    });
+
+                    return;
+                }
+
+
+                const channel =
+                    interaction.channel;
+
+
+                if (
+                    !channel ||
+                    !channel.isTextBased()
+                ) {
+
+                    return;
+                }
+
+
+                // ==========================================
+                // CUSTOMER
+                // ==========================================
+
+                const ownerId =
+                    getTicketOwnerId(
+                        channel
+                    );
+
+
+                const ownerMention =
+                    ownerId
+                        ? `<@${ownerId}>`
+                        : 'Customer';
+
+
+                // ==========================================
+                // TICKET TYPE
+                // ==========================================
+
+                const ticketTypeName =
+                    getTicketTypeName(
+                        channel
+                    );
+
+
+                // ==========================================
+                // ADD CLAIMED TO NAME
+                // ==========================================
+
+                let newName =
+                    channel.name;
+
+
+                if (
+                    !newName.startsWith(
+                        'CLAIMED-'
+                    )
+                ) {
+
+                    newName =
+                        `CLAIMED-${newName}`;
+
+                }
+
+
+                await channel.setName(
+                    newName
+                );
+
+
+                // ==========================================
+                // SAVE CLAIMED USER
+                // ==========================================
+
+                let topic =
+                    channel.topic || '';
+
+
+                topic =
+                    topic.replace(
+                        /\|claimed-by:\d+/,
+                        ''
+                    );
+
+
+                topic +=
+                    `|claimed-by:${interaction.user.id}`;
+
+
+                await channel.setTopic(
+                    topic
+                );
+
+
+                // ==========================================
+                // CLAIM MESSAGE
+                // ==========================================
+
+                const claimContainer =
+                    new (
+                        require('discord.js')
+                            .ContainerBuilder
+                    )
+
+                        .addTextDisplayComponents(
+
+                            new (
+                                require('discord.js')
+                                    .TextDisplayBuilder
+                            )
+
+                                .setContent(
+
+                                    `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`
+
+                                )
+
+                        );
+
+
+                await channel.send({
+
+                    components: [
+                        claimContainer
+                    ],
+
+                    flags:
+                        MessageFlags.IsComponentsV2
+
+                });
+
+
+                await interaction.reply({
+
+                    content:
+                        '✅ Ticket claimed.',
+
+                    flags:
+                        MessageFlags.Ephemeral
+
+                });
+
+
+                return;
+            }
+
+
+            // ==========================================
+            // CLOSE
+            // ==========================================
+
+            if (
+                interaction.customId ===
+                'ticket_close'
+            ) {
+
+                // CLOSE IS INTENTIONALLY
+                // INACTIVE FOR NOW.
+
+                await interaction.deferUpdate();
+
+                return;
+            }
+
+
+            // ==========================================
+            // HAND OFF
+            // ==========================================
+
+            if (
+                interaction.customId ===
+                'ticket_handoff'
+            ) {
+
+                const member =
+                    interaction.member;
+
+
+                // ==========================================
+                // CHECK SUPPORT
+                // ==========================================
+
+                if (
+                    !isSupportMember(
+                        member
+                    )
+                ) {
+
+                    await interaction.reply({
+
+                        content:
+                            'Only a support member can use this. The ticket must be claimed before using this.',
+
+                        flags:
+                            MessageFlags.Ephemeral
+
+                    });
+
+                    return;
+                }
+
+
+                const channel =
+                    interaction.channel;
+
+
+                // ==========================================
+                // CHECK CLAIMED
+                // ==========================================
+
+                const claimedBy =
+                    getClaimedUserId(
+                        channel
+                    );
+
+
+                if (!claimedBy) {
+
+                    await interaction.reply({
+
+                        content:
+                            'Only a support member can use this. The ticket must be claimed before using this.',
+
+                        flags:
+                            MessageFlags.Ephemeral
+
+                    });
+
+                    return;
+                }
+
+
+                // ==========================================
+                // CREATE HAND OFF MODAL
+                // ==========================================
+
+                const modal =
+                    new ModalBuilder()
+
+                        .setCustomId(
+                            'ticket_handoff_modal'
+                        )
+
+                        .setTitle(
+                            'Hand Off Ticket'
+                        );
+
+
+                // ==========================================
+                // HAND OFF DROPDOWN
+                // ==========================================
+
+                const select =
+                    new StringSelectMenuBuilder()
+
+                        .setCustomId(
+                            'handoff_destination'
+                        )
+
+                        .setPlaceholder(
+                            'Select a destination...'
+                        )
+
+                        .setMinValues(1)
+
+                        .setMaxValues(1)
+
+                        .addOptions(
+
+                            new StringSelectMenuOptionBuilder()
+
+                                .setLabel(
+                                    'Reports & Appeals Tickets'
+                                )
+
+                                .setValue(
+                                    'reports_appeals'
+                                ),
+
+
+                            new StringSelectMenuOptionBuilder()
+
+                                .setLabel(
+                                    'Support Tickets'
+                                )
+
+                                .setValue(
+                                    'support'
+                                ),
+
+
+                            new StringSelectMenuOptionBuilder()
+
+                                .setLabel(
+                                    'Senior Support Tickets'
+                                )
+
+                                .setValue(
+                                    'senior'
+                                )
+
+                        );
+
+
+                const label =
+                    new LabelBuilder()
+
+                        .setLabel(
+                            'Where would you like to hand this to?'
+                        )
+
+                        .setStringSelectMenuComponent(
+                            select
+                        );
+
+
+                modal.addLabelComponents(
+                    label
+                );
+
+
+                await interaction.showModal(
+                    modal
+                );
+
+                return;
             }
 
         }
 
     }
+);
 
-}
 
-});
+// ==========================================
+// LOGIN
+// ==========================================
 
-console.log('🔄 Attempting to log in...');
-console.log('🔑 Token loaded:', !!process.env.DISCORD_TOKEN);
-console.log('🏠 Guild ID:', process.env.DISCORD_GUILD_ID);
-client.login(process.env.DISCORD_TOKEN);
+console.log(
+    '🔄 Attempting to log in...'
+);
+
+console.log(
+    '🔑 Token loaded:',
+    !!process.env.DISCORD_TOKEN
+);
+
+console.log(
+    '🏠 Guild ID:',
+    process.env.DISCORD_GUILD_ID
+);
+
+
+client.login(
+    process.env.DISCORD_TOKEN
+);

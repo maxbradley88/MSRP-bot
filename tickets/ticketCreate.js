@@ -1,6 +1,17 @@
+const path = require('path');
+
 const {
     ChannelType,
-    PermissionFlagsBits
+    PermissionFlagsBits,
+    MessageFlags,
+    ContainerBuilder,
+    MediaGalleryBuilder,
+    MediaGalleryItemBuilder,
+    SeparatorBuilder,
+    TextDisplayBuilder,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle
 } = require('discord.js');
 
 const config = require('./ticketConfig');
@@ -12,69 +23,86 @@ async function createTicket(interaction, ticketType, answers = {}) {
 
     const typeConfig = config.ticketTypes[ticketType];
 
-    // Make sure the ticket type exists
     if (!typeConfig) {
         await interaction.reply({
             content: '❌ This ticket type does not exist.',
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
+
         return;
     }
 
     // ==========================================
-    // WORK OUT WHICH CATEGORY THIS TICKET USES
+    // DETERMINE CATEGORY
     // ==========================================
 
-const isSeniorTicket = typeConfig.category === 2;
-const isReportsAppealsTicket = typeConfig.category === 3;
+    const isSeniorTicket = typeConfig.category === 2;
+    const isReportsAppealsTicket = typeConfig.category === 3;
 
-let categoryId;
+    let categoryId;
 
-if (isReportsAppealsTicket) {
-    categoryId = config.reportsAppealsTicketCategoryId;
-} else if (isSeniorTicket) {
-    categoryId = config.seniorTicketCategoryId;
-} else {
-    categoryId = config.supportTicketCategoryId;
-}
+    if (isReportsAppealsTicket) {
+
+        categoryId =
+            config.reportsAppealsTicketCategoryId;
+
+    } else if (isSeniorTicket) {
+
+        categoryId =
+            config.seniorTicketCategoryId;
+
+    } else {
+
+        categoryId =
+            config.supportTicketCategoryId;
+    }
 
 
     // ==========================================
-    // CHECK HOW MANY TICKETS THE USER HAS
+    // CHECK USER TICKET LIMIT
     // ==========================================
 
-    const userTickets = guild.channels.cache.filter(channel =>
-        channel.topic?.startsWith(`ticket-owner:${user.id}`)
-    );
+    const userTickets =
+        guild.channels.cache.filter(channel =>
+            channel.topic?.startsWith(
+                `ticket-owner:${user.id}`
+            )
+        );
 
-    const userTicketCount = userTickets.size;
+    const userTicketCount =
+        userTickets.size;
+
 
     if (
         !isSeniorTicket &&
-        userTicketCount >= config.maxTicketsPerUser
+        userTicketCount >=
+            config.maxTicketsPerUser
     ) {
+
         await interaction.reply({
             content:
                 `❌ You already have the maximum number of open tickets (${config.maxTicketsPerUser}).`,
-            ephemeral: true
+            flags:
+                MessageFlags.Ephemeral
         });
+
         return;
     }
 
 
-    // ==========================================
-    // SENIOR TICKET LIMIT
-    // ==========================================
-
     if (
         isSeniorTicket &&
-        userTicketCount >= config.maxSeniorTicketsPerUser
+        userTicketCount >=
+            config.maxSeniorTicketsPerUser
     ) {
+
         await interaction.reply({
             content:
                 `❌ You already have the maximum number of open Senior Support tickets (${config.maxSeniorTicketsPerUser}).`,
-            ephemeral: true
+            flags:
+                MessageFlags.Ephemeral
         });
+
         return;
     }
 
@@ -85,17 +113,17 @@ if (isReportsAppealsTicket) {
 
     const permissionOverwrites = [
 
-        // Hide the ticket from everyone
         {
             id: guild.roles.everyone.id,
+
             deny: [
                 PermissionFlagsBits.ViewChannel
             ]
         },
 
-        // Ticket creator
         {
             id: user.id,
+
             allow: [
                 PermissionFlagsBits.ViewChannel,
                 PermissionFlagsBits.SendMessages,
@@ -103,9 +131,9 @@ if (isReportsAppealsTicket) {
             ]
         },
 
-        // Support Staff
         {
             id: config.supportStaffRoleId,
+
             allow: [
                 PermissionFlagsBits.ViewChannel,
                 PermissionFlagsBits.SendMessages,
@@ -113,9 +141,9 @@ if (isReportsAppealsTicket) {
             ]
         },
 
-        // Senior Support Staff can always see tickets
         {
             id: config.seniorSupportStaffRoleId,
+
             allow: [
                 PermissionFlagsBits.ViewChannel,
                 PermissionFlagsBits.SendMessages,
@@ -123,9 +151,19 @@ if (isReportsAppealsTicket) {
             ]
         },
 
-        // Bot
+        {
+            id: config.reportsAppealsRoleId,
+
+            allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory
+            ]
+        },
+
         {
             id: guild.members.me.id,
+
             allow: [
                 PermissionFlagsBits.ViewChannel,
                 PermissionFlagsBits.SendMessages,
@@ -134,7 +172,6 @@ if (isReportsAppealsTicket) {
                 PermissionFlagsBits.ManageMessages
             ]
         }
-
     ];
 
 
@@ -142,69 +179,396 @@ if (isReportsAppealsTicket) {
     // TICKET NUMBER
     // ==========================================
 
-    const ticketNumber = guild.channels.cache.filter(
-        channel =>
-            channel.parentId === categoryId &&
-            channel.topic?.startsWith('ticket-owner:')
-    ).size + 1;
+    const ticketNumber =
+        guild.channels.cache.filter(
+            channel =>
+                channel.parentId === categoryId &&
+                channel.topic?.startsWith(
+                    'ticket-owner:'
+                )
+        ).size + 1;
 
-    const paddedNumber = String(ticketNumber).padStart(3, '0');
+    const paddedNumber =
+        String(ticketNumber).padStart(3, '0');
 
 
     // ==========================================
     // CHANNEL NAME
     // ==========================================
 
-    const safeUsername = user.username
-        .toLowerCase()
-        .replace(/[^a-z0-9-]/g, '-');
+    const safeUsername =
+        user.username
+            .toLowerCase()
+            .replace(/[^a-z0-9-]/g, '-');
 
     const channelName =
         `${ticketType}-${safeUsername}-${paddedNumber}`;
 
 
     // ==========================================
-    // CREATE CHANNEL
+    // CREATE TICKET CHANNEL
     // ==========================================
 
-    const ticketChannel = await guild.channels.create({
+    const ticketChannel =
+        await guild.channels.create({
 
-        name: channelName,
+            name: channelName,
 
-        type: ChannelType.GuildText,
+            type: ChannelType.GuildText,
 
-        parent: categoryId,
+            parent: categoryId,
 
-        topic: `ticket-owner:${user.id}`,
+            topic:
+                `ticket-owner:${user.id}` +
+                `|ticket-type:${ticketType}`,
 
-        permissionOverwrites
-
-    });
+            permissionOverwrites
+        });
 
 
     // ==========================================
-    // RESPOND TO USER
+    // CREATION RESPONSE
     // ==========================================
 
     await interaction.reply({
-        content: `✅ Your ticket has been created: ${ticketChannel}`,
-        ephemeral: true
+
+        content:
+            `✅ Your ticket has been created: ${ticketChannel}`,
+
+        flags:
+            MessageFlags.Ephemeral
     });
 
 
     // ==========================================
-    // OPENING MESSAGE
+    // TOP NORMAL MESSAGE
+    // ==========================================
+    //
+    // This is intentionally OUTSIDE the
+    // Components V2 container.
+    //
+    // Customer + correct department role.
+    //
+
+    await ticketChannel.send({
+
+        content:
+            `${user} <@&${typeConfig.roleId}>`
+    });
+
+
+    // ==========================================
+    // FORM RESPONSES
     // ==========================================
 
-await ticketChannel.send({
-    content:
-        `**Thank you for using the support system ${user}**\n` +
-        `A staff member will be with you shortly, please provide any details that may be helpful to our support team in the meantime.\n\n` +
-        `*Please do not mention our support staff*\n` +
-        `<@&${typeConfig.roleId}>`
-});
+    const responseLines = [];
+
+
+    for (
+        const question of
+        typeConfig.questions || []
+    ) {
+
+        let answer =
+            answers[question.id];
+
+
+        if (
+            answer === undefined ||
+            answer === null ||
+            answer === ''
+        ) {
+
+            answer =
+                'No response provided.';
+        }
+
+
+        // ==========================================
+        // GET DROPDOWN LABEL
+        // ==========================================
+
+        if (
+            question.type ===
+            'dropdown'
+        ) {
+
+            const selectedOption =
+                question.options?.find(
+                    option =>
+                        option.value ===
+                        answer
+                );
+
+            if (selectedOption) {
+
+                answer =
+                    selectedOption.label;
+            }
+        }
+
+
+        responseLines.push(
+
+            `**${question.label}**\n${answer}`
+
+        );
+    }
+
+
+    const responsesText =
+        responseLines.length > 0
+            ? responseLines.join('\n\n')
+            : 'No form responses were provided.';
+
+
+    // ==========================================
+    // COMPONENTS V2 WELCOME CONTAINER
+    // ==========================================
+
+    const welcomeContainer =
+        new ContainerBuilder()
+
+
+            // ==========================================
+            // TOP IMAGE
+            // ==========================================
+
+            .addMediaGalleryComponents(
+
+                new MediaGalleryBuilder()
+                    .addItems(
+
+                        new MediaGalleryItemBuilder()
+                            .setURL(
+                                'attachment://ticket-dashboard.png'
+                            )
+
+                    )
+            )
+
+
+            // ==========================================
+            // DIVIDER
+            // ==========================================
+
+            .addSeparatorComponents(
+
+                new SeparatorBuilder()
+                    .setDivider(true)
+
+            )
+
+
+            // ==========================================
+            // WELCOME MESSAGE
+            // ==========================================
+
+            .addTextDisplayComponents(
+
+                new TextDisplayBuilder()
+                    .setContent(
+
+                        '**Thank you for using the MSRP support system**\n\n' +
+                        'One of our support staff will assist you shortly, ' +
+                        'please provide any evidence or required context that ' +
+                        'may help our staff.'
+
+                    )
+
+            )
+
+
+            // ==========================================
+            // DIVIDER
+            // ==========================================
+
+            .addSeparatorComponents(
+
+                new SeparatorBuilder()
+                    .setDivider(true)
+
+            )
+
+
+            // ==========================================
+            // FORM RESPONSES
+            // ==========================================
+
+            .addTextDisplayComponents(
+
+                new TextDisplayBuilder()
+                    .setContent(
+                        responsesText
+                    )
+
+            )
+
+
+            // ==========================================
+            // DIVIDER
+            // ==========================================
+
+            .addSeparatorComponents(
+
+                new SeparatorBuilder()
+                    .setDivider(true)
+
+            )
+
+
+            // ==========================================
+            // BOTTOM IMAGE
+            // ==========================================
+
+            .addMediaGalleryComponents(
+
+                new MediaGalleryBuilder()
+                    .addItems(
+
+                        new MediaGalleryItemBuilder()
+                            .setURL(
+                                'attachment://image.png'
+                            )
+
+                    )
+
+            );
+
+
+    // ==========================================
+    // SEND WELCOME CONTAINER
+    // ==========================================
+
+    await ticketChannel.send({
+
+        components: [
+            welcomeContainer
+        ],
+
+        files: [
+
+            {
+                attachment:
+                    path.join(
+                        __dirname,
+                        '..',
+                        'images',
+                        'ticket-dashboard.png'
+                    ),
+
+                name:
+                    'ticket-dashboard.png'
+            },
+
+            {
+                attachment:
+                    path.join(
+                        __dirname,
+                        '..',
+                        'images',
+                        'image.png'
+                    ),
+
+                name:
+                    'image.png'
+            }
+
+        ],
+
+        flags:
+            MessageFlags.IsComponentsV2
+    });
+
+
+    // ==========================================
+    // TICKET CONTROL BUTTONS
+    // ==========================================
+
+    const ticketButtons =
+        new ActionRowBuilder()
+            .addComponents(
+
+
+                // ==========================================
+                // CLAIM
+                // ==========================================
+
+                new ButtonBuilder()
+
+                    .setCustomId(
+                        'ticket_claim'
+                    )
+
+                    .setLabel(
+                        'Claim'
+                    )
+
+                    .setStyle(
+                        ButtonStyle.Success
+                    )
+
+                    .setEmoji('✓'),
+
+
+                // ==========================================
+                // CLOSE
+                // ==========================================
+
+                new ButtonBuilder()
+
+                    .setCustomId(
+                        'ticket_close'
+                    )
+
+                    .setLabel(
+                        'Close'
+                    )
+
+                    .setStyle(
+                        ButtonStyle.Danger
+                    )
+
+                    .setEmoji('🔒'),
+
+
+                // ==========================================
+                // HAND OFF
+                // ==========================================
+
+                new ButtonBuilder()
+
+                    .setCustomId(
+                        'ticket_handoff'
+                    )
+
+                    .setLabel(
+                        'Hand Off'
+                    )
+
+                    .setStyle(
+                        ButtonStyle.Secondary
+                    )
+
+                    .setEmoji('↗')
+
+            );
+
+
+    // ==========================================
+    // SEND BUTTONS OUTSIDE CONTAINER
+    // ==========================================
+
+    await ticketChannel.send({
+
+        components: [
+            ticketButtons
+        ]
+
+    });
 
 }
+
 
 module.exports = {
     createTicket
