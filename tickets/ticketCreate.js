@@ -290,7 +290,7 @@ const permissionOverwrites = [
         ) {
 
             answer =
-                'No response provided.';
+                'N/A';
         }
 
 
@@ -405,14 +405,15 @@ const permissionOverwrites = [
             // FORM RESPONSES
             // ==========================================
 
-            .addTextDisplayComponents(
+.addTextDisplayComponents(
 
-                new TextDisplayBuilder()
-                    .setContent(
-                        responsesText
-                    )
+    new TextDisplayBuilder()
+        .setContent(
+            '__**Details / Form Responses**__\n\n' +
+            responsesText
+        )
 
-            )
+)
 
 
             // ==========================================
@@ -491,7 +492,7 @@ const permissionOverwrites = [
     });
 
 
-    // ==========================================
+     // ==========================================
     // TICKET CONTROL BUTTONS
     // ==========================================
 
@@ -499,25 +500,20 @@ const permissionOverwrites = [
         new ActionRowBuilder()
             .addComponents(
 
-
                 // ==========================================
                 // CLAIM
                 // ==========================================
 
                 new ButtonBuilder()
-
                     .setCustomId(
                         'ticket_claim'
                     )
-
                     .setLabel(
                         'Claim'
                     )
-
                     .setStyle(
                         ButtonStyle.Success
                     )
-
                     .setEmoji('✓'),
 
 
@@ -526,19 +522,15 @@ const permissionOverwrites = [
                 // ==========================================
 
                 new ButtonBuilder()
-
                     .setCustomId(
                         'ticket_close'
                     )
-
                     .setLabel(
                         'Close'
                     )
-
                     .setStyle(
                         ButtonStyle.Danger
                     )
-
                     .setEmoji('🔒'),
 
 
@@ -547,23 +539,73 @@ const permissionOverwrites = [
                 // ==========================================
 
                 new ButtonBuilder()
-
                     .setCustomId(
                         'ticket_handoff'
                     )
-
                     .setLabel(
                         'Hand Off'
                     )
-
                     .setStyle(
                         ButtonStyle.Secondary
                     )
-
                     .setEmoji('↗')
-
             );
 
+
+    // ==========================================
+    // ADD BUTTONS TO CONTAINER
+    // ==========================================
+
+    welcomeContainer
+        .addActionRowComponents(
+            ticketButtons
+        );
+
+
+    // ==========================================
+    // SEND WELCOME CONTAINER
+    // ==========================================
+
+    await ticketChannel.send({
+
+        components: [
+            welcomeContainer
+        ],
+
+        files: [
+
+            {
+                attachment:
+                    path.join(
+                        __dirname,
+                        '..',
+                        'images',
+                        'ticket-dashboard.png'
+                    ),
+
+                name:
+                    'ticket-dashboard.png'
+            },
+
+            {
+                attachment:
+                    path.join(
+                        __dirname,
+                        '..',
+                        'images',
+                        'image.png'
+                    ),
+
+                name:
+                    'image.png'
+            }
+
+        ],
+
+        flags:
+            MessageFlags.IsComponentsV2
+
+    });
 
     // ==========================================
     // SEND BUTTONS OUTSIDE CONTAINER
