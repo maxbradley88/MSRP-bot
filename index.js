@@ -118,7 +118,7 @@ function getTicketOwnerId(channel) {
 
         channel.topic?.match(
 
-            /(?:^|**\\|**)ticket-owner:(\d+)/
+            /(?:^|\|)ticket-owner:(\d+)/
 
         );
 
@@ -136,7 +136,7 @@ function getTicketType(channel) {
 
         channel.topic?.match(
 
-            /(?:^|**\\|**)ticket-type:([^|]+)/
+            /(?:^|\|)ticket-type:([^|]+)/
 
         );
 
@@ -154,7 +154,7 @@ function getClaimedUserId(channel) {
 
         channel.topic?.match(
 
-            /(?:^|**\\|**)claimed-by:(\d+)/
+            /(?:^|\|)claimed-by:(\d+)/
 
         );
 
@@ -220,7 +220,7 @@ client.once(
 
         console.log(
 
-            \`Logged in as ${client.user.tag}\`
+            `Logged in as ${client.user.tag}`
 
         );
 
@@ -430,7 +430,7 @@ client.on(
 
                         .setCustomId(
 
-                            \`ticket_form:${ticketType}\`
+                            `ticket_form:${ticketType}`
 
                         )
 
@@ -1064,30 +1064,6 @@ client.on(
 
 
 
-                        await channel.setName(
-
-                            newName
-
-                        );
-
-
-
-                        await channel.setParent(
-
-                            newCategoryId,
-
-                            {
-
-                                lockPermissions:
-
-                                    false
-
-                            }
-
-                        );
-
-
-
                         let newTopic =
 
                             channel.topic || '';
@@ -1098,7 +1074,7 @@ client.on(
 
                             newTopic.replace(
 
-                                /**\\|**claimed-by:\d+/,
+                                /\|claimed-by:\d+/,
 
                                 ''
 
@@ -1106,11 +1082,17 @@ client.on(
 
 
 
-                        await channel.setTopic(
+                        await channel.edit({
 
-                            newTopic
+                            name: newName,
 
-                        );
+                            parent: newCategoryId,
+
+                            topic: newTopic,
+
+                            lockPermissions: false
+
+                        });
 
 
 
@@ -1128,7 +1110,7 @@ client.on(
 
                             ownerId
 
-                                ? \`<@${ownerId}>\`
+                                ? `<@${ownerId}>`
 
                                 : 'Customer';
 
@@ -1136,11 +1118,11 @@ client.on(
 
                         let message =
 
-                            \`${ownerMention}\n\n\` +
+                            `${ownerMention}\n\n` +
 
-                            \`\*\*This ticket has been handed to ${destinationName}.\*\*\n\` +
+                            `\*\*This ticket has been handed to ${destinationName}.\*\*\n` +
 
-                            \`A support member will be with you shortly.\`;
+                            `A support member will be with you shortly.`;
 
 
 
@@ -1150,7 +1132,7 @@ client.on(
 
                             message +=
 
-                                \`\n\n\*\*Notes from previous staff member\*\*\n\` +
+                                `\n\n\*\*Notes from previous staff member\*\*\n` +
 
                                 notes
 
@@ -1160,7 +1142,7 @@ client.on(
 
                                         line =>
 
-                                            \`> ${line}\`
+                                            `> ${line}`
 
                                     )
 
@@ -1398,7 +1380,7 @@ client.on(
 
                             console.error(
 
-                                \`Failed to collect question "${question.id}":\`,
+                                `Failed to collect question "${question.id}":`,
 
                                 error
 
@@ -1786,7 +1768,7 @@ client.on(
 
                             content:
 
-                                \`❌ This ticket has already been claimed by <@${claimedBy}>.\`,
+                                `❌ This ticket has already been claimed by <@${claimedBy}>.`,
 
                             flags:
 
@@ -1844,7 +1826,7 @@ client.on(
 
                                 content:
 
-                                    \`❌ This ticket has already been claimed by <@${latestClaim}>.\`
+                                    `❌ This ticket has already been claimed by <@${latestClaim}>.`
 
                             });
 
@@ -1870,7 +1852,7 @@ client.on(
 
                             ownerId
 
-                                ? \`<@${ownerId}>\`
+                                ? `<@${ownerId}>`
 
                                 : 'Customer';
 
@@ -1906,17 +1888,9 @@ client.on(
 
                             newName =
 
-                                \`CLAIMED-${newName}\`;
+                                `CLAIMED-${newName}`;
 
                         }
-
-
-
-                        await channel.setName(
-
-                            newName
-
-                        );
 
 
 
@@ -1930,7 +1904,7 @@ client.on(
 
                             topic.replace(
 
-                                /**\\|**claimed-by:\d+/,
+                                /\|claimed-by:\d+/,
 
                                 ''
 
@@ -1940,15 +1914,17 @@ client.on(
 
                         topic +=
 
-                            \`|claimed-by:${userId}\`;
+                            `|claimed-by:${userId}`;
 
 
 
-                        await channel.setTopic(
+                        await channel.edit({
+
+                            name: newName,
 
                             topic
 
-                        );
+                        });
 
 
 
@@ -1958,9 +1934,9 @@ client.on(
 
                             isSenior
 
-                                ? \`${ownerMention} | ${interaction.user} has taken over this ${ticketTypeName} ticket from <@${latestClaim}> as Senior Support.\`
+                                ? `${ownerMention} | ${interaction.user} has taken over this ${ticketTypeName} ticket from <@${latestClaim}> as Senior Support.`
 
-                                : \`${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.\`;
+                                : `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`;
 
 
 
@@ -2354,7 +2330,7 @@ client.on(
 
                     console.log(
 
-                        \`[HANDOFF BUTTON] User=${interaction.user.id} ClaimedBy=${claimedBy || 'NONE'} Senior=${isSenior}\`
+                        `[HANDOFF BUTTON] User=${interaction.user.id} ClaimedBy=${claimedBy || 'NONE'} Senior=${isSenior}`
 
                     );
 
@@ -2438,7 +2414,7 @@ client.on(
 
                             .setCustomId(
 
-                                \`ticket_handoff_modal:${channel.id}\`
+                                'ticket_handoff_modal'
 
                             )
 
