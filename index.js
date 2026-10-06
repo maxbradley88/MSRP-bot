@@ -1342,118 +1342,111 @@ client.on(
                                 ''
                             );
 
+                    const version =
+                        applyOptimisticTicketState(
+                            channel,
+                            {
+                                claimedBy: null,
+                                departmentKey:
+                                    destination.key
+                            }
+                        );
+
                     await interaction.reply({
                         content:
-                            `⏳ Moving ticket to ${destination.name}...`,
+                            `✅ Hand off accepted. Moving ticket to ${destination.name}.`,
                         flags: MessageFlags.Ephemeral
                     });
 
-                    try {
-                        // Clear the live claim state immediately. This is important
-                        // because Claim uses an optimistic cache for fast responses.
-                        optimisticClaimStates.set(
-                            channel.id,
-                            null
-                        );
+                    // Move, rename and unclaim in ONE Discord channel edit.
+                    // This runs in the background so Discord rate limits do not
+                    // leave the interaction sitting on "thinking" for minutes.
+                    void channel.edit({
+                        parent: destination.categoryId,
+                        lockPermissions: false,
+                        name: newName,
+                        topic: newTopic,
+                        reason:
+                            `Ticket handed off by ${interaction.user.tag}`
+                    })
+                        .then(async updatedChannel => {
+                            if (
+                                ticketChannelEditVersions.get(
+                                    channel.id
+                                ) !== version
+                            ) {
+                                return;
+                            }
 
-                        const movedChannel =
-                            await channel.setParent(
-                                destination.categoryId,
-                                {
-                                    lockPermissions: false,
-                                    reason:
-                                        `Ticket handed off by ${interaction.user.tag}`
-                                }
-                            );
-
-                        const updatedChannel =
-                            await movedChannel.edit({
-                                name: newName,
-                                topic: newTopic,
-                                reason:
-                                    `Ticket renamed and unclaimed during hand off by ${interaction.user.tag}`
-                            });
-
-                        // Remember the confirmed destination so another handoff
-                        // immediately uses the new department, even if Discord's
-                        // cached parent takes a moment to refresh.
-                        optimisticDepartmentStates.set(
-                            channel.id,
-                            destination.key
-                        );
-
-                        // The claimant is now persisted as removed in the topic.
-                        optimisticClaimStates.delete(
-                            channel.id
-                        );
-
-                        await interaction.editReply({
-                            content:
-                                `✅ Ticket handed off to ${destination.name}.`
-                        });
-
-                        const ownerMention =
-                            ownerId
-                                ? `<@${ownerId}>`
-                                : 'Customer';
-
-                        const destinationRoleMention =
-                            destination.roleId
-                                ? `<@&${destination.roleId}>`
-                                : destination.name;
-
-                        let message =
-                            `${ownerMention} ${destinationRoleMention}\n\n` +
-                            `**This ticket has been handed to ${destination.name}.**\n` +
-                            'The ticket has been unclaimed for the new department. ' +
-                            'A support member will be with you shortly.';
-
-                        if (notes) {
-                            message +=
-                                '\n\n**Notes from previous staff member**\n' +
-                                notes
-                                    .split('\n')
-                                    .map(
-                                        line =>
-                                            `> ${line}`
-                                    )
-                                    .join('\n');
-                        }
-
-                        const container =
-                            new ContainerBuilder()
-                                .addTextDisplayComponents(
-                                    new TextDisplayBuilder()
-                                        .setContent(message)
+                            if (
+                                optimisticClaimStates.has(
+                                    channel.id
+                                ) &&
+                                optimisticClaimStates.get(
+                                    channel.id
+                                ) === null &&
+                                getClaimedUserIdFromTopic(
+                                    updatedChannel.topic
+                                ) === null
+                            ) {
+                                optimisticClaimStates.delete(
+                                    channel.id
                                 );
+                            }
 
-                        try {
-                            await updatedChannel.send({
-                                components: [container],
-                                flags:
-                                    MessageFlags.IsComponentsV2,
-                                allowedMentions: {
-                                    users:
-                                        ownerId
-                                            ? [ownerId]
-                                            : [],
-                                    roles:
-                                        destination.roleId
-                                            ? [
-                                                destination.roleId
-                                            ]
-                                            : []
-                                }
-                            });
-                        } catch (messageError) {
-                            console.error(
-                                '[HANDOFF MESSAGE ERROR]',
-                                messageError
-                            );
+                            if (
+                                optimisticDepartmentStates.get(
+                                    channel.id
+                                ) === destination.key &&
+                                getTicketDepartmentFromParentId(
+                                    updatedChannel.parentId
+                                )?.key === destination.key
+                            ) {
+                                optimisticDepartmentStates.delete(
+                                    channel.id
+                                );
+                            }
+
+                            const ownerMention =
+                                ownerId
+                                    ? `<@${ownerId}>`
+                                    : 'Customer';
+
+                            const destinationRoleMention =
+                                destination.roleId
+                                    ? `<@&${destination.roleId}>`
+                                    : destination.name;
+
+                            let message =
+                                `${ownerMention} ${destinationRoleMention}\n\n` +
+                                `**This ticket has been handed to ${destination.name}.**\n` +
+                                'The ticket has been unclaimed for the new department. ' +
+                                'A support member will be with you shortly.';
+
+                            if (notes) {
+                                message +=
+                                    '\n\n**Notes from previous staff member**\n' +
+                                    notes
+                                        .split('\n')
+                                        .map(
+                                            line =>
+                                                `> ${line}`
+                                        )
+                                        .join('\n');
+                            }
+
+                            const container =
+                                new ContainerBuilder()
+                                    .addTextDisplayComponents(
+                                        new TextDisplayBuilder()
+                                            .setContent(message)
+                                    );
 
                             try {
                                 await updatedChannel.send({
-                                    content: message,
+                                    components: [container],
+                                    flags:
+                                        MessageFlags.IsComponentsV2,
                                     allowedMentions: {
                                         users:
                                             ownerId
@@ -1461,43 +1454,65 @@ client.on(
                                                 : [],
                                         roles:
                                             destination.roleId
-                                                ? [
-                                                    destination.roleId
-                                                ]
+                                                ? [destination.roleId]
                                                 : []
                                     }
                                 });
-                            } catch (fallbackError) {
+                            } catch (messageError) {
                                 console.error(
-                                    '[HANDOFF FALLBACK MESSAGE ERROR]',
-                                    fallbackError
+                                    '[HANDOFF MESSAGE ERROR]',
+                                    messageError
+                                );
+
+                                try {
+                                    await updatedChannel.send({
+                                        content: message,
+                                        allowedMentions: {
+                                            users:
+                                                ownerId
+                                                    ? [ownerId]
+                                                    : [],
+                                            roles:
+                                                destination.roleId
+                                                    ? [destination.roleId]
+                                                    : []
+                                        }
+                                    });
+                                } catch (fallbackError) {
+                                    console.error(
+                                        '[HANDOFF FALLBACK MESSAGE ERROR]',
+                                        fallbackError
+                                    );
+                                }
+                            }
+                        })
+                        .catch(async moveError => {
+                            if (
+                                ticketChannelEditVersions.get(
+                                    channel.id
+                                ) === version
+                            ) {
+                                optimisticDepartmentStates.delete(
+                                    channel.id
+                                );
+                                optimisticClaimStates.delete(
+                                    channel.id
                                 );
                             }
-                        }
-                    } catch (moveError) {
-                        // Do not leave a fake optimistic state if Discord failed.
-                        optimisticDepartmentStates.delete(
-                            channel.id
-                        );
-                        optimisticClaimStates.delete(
-                            channel.id
-                        );
 
-                        console.error(
-                            '[HANDOFF MOVE ERROR]',
-                            moveError
-                        );
+                            console.error(
+                                '[HANDOFF MOVE ERROR]',
+                                moveError
+                            );
 
-                        try {
-                            await interaction.editReply({
-                                content:
-                                    '❌ Discord could not complete this hand off. The ticket was not recorded as moved; please try again.'
-                            });
-                        } catch {}
-
-                        return;
-                    }
-
+                            try {
+                                await interaction.followUp({
+                                    content:
+                                        '❌ Discord could not complete this hand off. The ticket was not moved; please try again.',
+                                    flags: MessageFlags.Ephemeral
+                                });
+                            } catch {}
+                        });
                     return;
                 }
 
