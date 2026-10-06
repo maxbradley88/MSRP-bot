@@ -341,6 +341,19 @@ function stripClaimedPrefix(channelName) {
         );
 }
 
+function formatTicketChannelName(value) {
+    const cleaned = String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9 _-]/g, '')
+        .replace(/[ _]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 90);
+
+    return cleaned || null;
+}
+
 function applyOptimisticTicketState(channel, updates = {}) {
     const version =
         (ticketChannelEditVersions.get(channel.id) || 0) + 1;
@@ -1182,6 +1195,13 @@ client.on(
                             return;
                         }
 
+                        let requestedName = '';
+                        try {
+                            requestedName = interaction.fields
+                                .getTextInputValue('handoff_name')
+                                ?.trim() || '';
+                        } catch {}
+
                         let notes = '';
                         try {
                             notes = interaction.fields
@@ -1190,7 +1210,13 @@ client.on(
                         } catch {}
 
                         const currentDepartment =
-                            getTicketDepartment(channel);
+                            getTicketDepartmentFromParentId(
+                                channel.parentId
+                            ) || getTicketDepartment(channel);
+
+                        // ------------------------------------------
+                        // UNCLAIM
+                        // ------------------------------------------
 
                         if (selected === 'unclaimed') {
                             const newName =
@@ -1203,26 +1229,50 @@ client.on(
                                         ''
                                     );
 
-                            const version =
-                                applyOptimisticTicketState(
-                                    channel,
-                                    { claimedBy: null }
-                                );
+                            // Make the permission state update immediately.
+                            optimisticClaimStates.set(
+                                channel.id,
+                                null
+                            );
 
                             await interaction.reply({
                                 content: '✅ Ticket unclaimed successfully.',
                                 flags: MessageFlags.Ephemeral
                             });
 
-                            persistTicketChannelEdit(
-                                channel,
-                                {
+                            // Only edit the channel if something actually needs changing.
+                            if (
+                                claimedBy ||
+                                /^(?:claimed-)+/i.test(channel.name) ||
+                                newTopic !== String(channel.topic || '')
+                            ) {
+                                void channel.edit({
                                     name: newName,
                                     topic: newTopic
-                                },
-                                version,
-                                'UNCLAIM'
-                            );
+                                }).then(updatedChannel => {
+                                    if (
+                                        getClaimedUserIdFromTopic(
+                                            updatedChannel.topic
+                                        ) === null
+                                    ) {
+                                        optimisticClaimStates.delete(
+                                            channel.id
+                                        );
+                                    }
+                                }).catch(error => {
+                                    optimisticClaimStates.delete(
+                                        channel.id
+                                    );
+                                    console.error(
+                                        '[UNCLAIM CHANNEL EDIT ERROR]',
+                                        error
+                                    );
+                                });
+                            } else {
+                                optimisticClaimStates.delete(
+                                    channel.id
+                                );
+                            }
 
                             const ownerMention = ownerId
                                 ? `<@${ownerId}>`
@@ -1297,24 +1347,12 @@ client.on(
                             return;
                         }
 
-                        let destination = null;
+                        // ------------------------------------------
+                        // DEPARTMENT HAND OFF
+                        // ------------------------------------------
 
-                        if (selected === 'reports_appeals') {
-                            destination =
-                                getTicketDepartmentFromKey(
-                                    'reports_appeals'
-                                );
-                        } else if (selected === 'support') {
-                            destination =
-                                getTicketDepartmentFromKey(
-                                    'support'
-                                );
-                        } else if (selected === 'senior') {
-                            destination =
-                                getTicketDepartmentFromKey(
-                                    'senior'
-                                );
-                        }
+                        const destination =
+                            getTicketDepartmentFromKey(selected);
 
                         if (!destination) {
                             await interaction.reply({
@@ -1335,7 +1373,13 @@ client.on(
                             return;
                         }
 
+                        const customName =
+                            formatTicketChannelName(
+                                requestedName
+                            );
+
                         const newName =
+                            customName ||
                             stripClaimedPrefix(channel.name);
 
                         const newTopic =
@@ -1345,31 +1389,60 @@ client.on(
                                     ''
                                 );
 
-                        const version =
-                            applyOptimisticTicketState(
-                                channel,
-                                {
-                                    claimedBy: null,
-                                    departmentKey: destination.key
-                                }
-                            );
-
+                        // Acknowledge the modal immediately so Discord never
+                        // sits on "thinking" while its channel API is queued.
                         await interaction.reply({
-                            content: '✅ Ticket handed off successfully.',
+                            content: `⏳ Moving ticket to ${destination.name}...`,
                             flags: MessageFlags.Ephemeral
                         });
 
-                        persistTicketChannelEdit(
-                            channel,
-                            {
+                        try {
+                            // setParent is deliberately used instead of relying
+                            // on channel.edit({ parent }) because this move must
+                            // actually succeed before we record the new department.
+                            await channel.setParent(
+                                destination.categoryId,
+                                {
+                                    lockPermissions: false,
+                                    reason:
+                                        `Ticket handed off by ${interaction.user.tag}`
+                                }
+                            );
+
+                            // Now unclaim and rename the ticket.
+                            await channel.edit({
                                 name: newName,
-                                parent: destination.categoryId,
-                                topic: newTopic,
-                                lockPermissions: false
-                            },
-                            version,
-                            'HANDOFF'
-                        );
+                                topic: newTopic
+                            });
+
+                            optimisticClaimStates.delete(
+                                channel.id
+                            );
+                            optimisticDepartmentStates.delete(
+                                channel.id
+                            );
+
+                            await interaction.editReply({
+                                content: `✅ Ticket handed off to ${destination.name}.`
+                            });
+                        } catch (moveError) {
+                            optimisticDepartmentStates.delete(
+                                channel.id
+                            );
+                            optimisticClaimStates.delete(
+                                channel.id
+                            );
+
+                            console.error(
+                                '[HANDOFF MOVE ERROR]',
+                                moveError
+                            );
+
+                            await interaction.editReply({
+                                content: '❌ Discord could not move this ticket to the selected department. The hand off was not recorded; please try again.'
+                            });
+                            return;
+                        }
 
                         const ownerMention = ownerId
                             ? `<@${ownerId}>`
@@ -1383,6 +1456,7 @@ client.on(
                         let message =
                             `${ownerMention} ${destinationRoleMention}\n\n` +
                             `**This ticket has been handed to ${destination.name}.**\n` +
+                            'The ticket has been unclaimed for the new department. ' +
                             'A support member will be with you shortly.';
 
                         if (notes) {
@@ -2474,11 +2548,14 @@ client.on(
 
 
 
+                    // Use the channel's real parent here, not an optimistic
+                    // remembered department, so the dropdown always reflects
+                    // where the ticket actually is in Discord.
                     const currentDepartment =
 
-                        getTicketDepartment(
+                        getTicketDepartmentFromParentId(
 
-                            channel
+                            channel.parentId
 
                         );
 
@@ -2486,61 +2563,25 @@ client.on(
 
                     const allDestinations = [
 
-                        {
+                        getTicketDepartmentFromKey(
 
-                            label:
+                            'support'
 
-                                'Support Tickets',
+                        ),
 
-                            value:
+                        getTicketDepartmentFromKey(
 
-                                'support',
+                            'senior'
 
-                            categoryId:
+                        ),
 
-                                config
+                        getTicketDepartmentFromKey(
 
-                                    .supportTicketCategoryId
+                            'reports_appeals'
 
-                        },
+                        )
 
-                        {
-
-                            label:
-
-                                'Senior Support Tickets',
-
-                            value:
-
-                                'senior',
-
-                            categoryId:
-
-                                config
-
-                                    .seniorTicketCategoryId
-
-                        },
-
-                        {
-
-                            label:
-
-                                'Reports & Appeals Tickets',
-
-                            value:
-
-                                'reports_appeals',
-
-                            categoryId:
-
-                                config
-
-                                    .reportsAppealsTicketCategoryId
-
-                        }
-
-                    ];
+                    ].filter(Boolean);
 
 
 
@@ -2566,13 +2607,13 @@ client.on(
 
                                         .setLabel(
 
-                                            destination.label
+                                            destination.name
 
                                         )
 
                                         .setValue(
 
-                                            destination.value
+                                            destination.key
 
                                         )
 
@@ -2659,6 +2700,54 @@ client.on(
                             .setStringSelectMenuComponent(
 
                                 select
+
+                            )
+
+                    );
+
+
+
+                    const ticketName =
+
+                        new TextInputBuilder()
+
+                            .setCustomId(
+
+                                'handoff_name'
+
+                            )
+
+                            .setStyle(
+
+                                TextInputStyle.Short
+
+                            )
+
+                            .setRequired(false)
+
+                            .setPlaceholder(
+
+                                'Example: Claiming giveaway prize | **leave blank if un-claiming**'
+
+                            )
+
+                            .setMaxLength(90);
+
+
+
+                    modal.addLabelComponents(
+
+                        new LabelBuilder()
+
+                            .setLabel(
+
+                                'Please name this ticket (Optional)'
+
+                            )
+
+                            .setTextInputComponent(
+
+                                ticketName
 
                             )
 
@@ -2769,7 +2858,6 @@ client.on(
                     return;
 
                 }
-
             }
 
 
