@@ -63,7 +63,7 @@ const client = new Client({
 
 });
 
-
+require('./messages/sendMessage')(client);
 
 const activeClaimChannels = new Set();
 
