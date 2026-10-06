@@ -97,72 +97,125 @@ async function runSyncWorker(channel) {
     const worker = (async () => {
         while (true) {
             const desired = desiredStates.get(channelId);
-            if (!desired) return;
+
+            if (!desired) {
+                return;
+            }
 
             const targetVersion = desired.version;
-            const targetName = String(desired.name || channel.name || '').slice(0, 100);
-            const targetTopic = String(desired.topic ?? channel.topic ?? '');
+
+            const targetName = String(
+                desired.name || channel.name || ''
+            ).slice(0, 100);
+
+            const targetTopic = String(
+                desired.topic ?? channel.topic ?? ''
+            );
 
             const actualName = String(channel.name || '');
             const actualTopic = String(channel.topic || '');
 
             if (
-                actualName.toLowerCase() === targetName.toLowerCase() &&
+                actualName.toLowerCase() ===
+                    targetName.toLowerCase() &&
                 actualTopic === targetTopic
             ) {
-                if (desiredStates.get(channelId)?.version === targetVersion) {
+                if (
+                    desiredStates.get(channelId)?.version ===
+                    targetVersion
+                ) {
                     return;
                 }
+
                 continue;
             }
 
-            let updatedChannel;
-
             try {
-                updatedChannel = await channel.edit({
-                    name: targetName,
-                    topic: targetTopic,
-                    reason: desired.reason || 'Ticket state sync'
-                });
-            } catch (error) {
-                console.error('[TICKET STATE SYNC ERROR]', error);
+                const updatedChannel =
+                    await channel.edit({
+                        name: targetName,
+                        topic: targetTopic,
+                        reason:
+                            desired.reason ||
+                            'Ticket state sync'
+                    });
 
-                // Keep the desired state. A transient Discord/API failure must
-                // never make the bot forget whether this ticket is claimed.
-                // Retry later, but only one retry chain exists per ticket.
+                if (updatedChannel) {
+                    channel = updatedChannel;
+                }
+            } catch (error) {
+                /*
+                 * Discord error 10003 = Unknown Channel.
+                 *
+                 * The ticket has been deleted.
+                 * NEVER retry it again.
+                 */
+                if (
+                    error?.code === 10003 ||
+                    error?.rawError?.code === 10003
+                ) {
+                    console.log(
+                        `[TICKET STATE] Forgetting deleted channel ${channelId}`
+                    );
+
+                    forgetTicket(channelId);
+                    return;
+                }
+
+                console.error(
+                    '[TICKET STATE SYNC ERROR]',
+                    error
+                );
+
+                /*
+                 * Retry actual temporary Discord errors.
+                 */
                 setTimeout(() => {
-                    if (!syncWorkers.has(channelId)) {
+                    if (
+                        desiredStates.has(channelId) &&
+                        !syncWorkers.has(channelId)
+                    ) {
                         void runSyncWorker(channel);
                     }
                 }, 3000);
+
                 return;
             }
 
-            const latest = desiredStates.get(channelId);
+            const latest =
+                desiredStates.get(channelId);
 
-            // Update the same channel object where possible so every other
-            // handler immediately sees the confirmed Discord state.
-            if (updatedChannel) {
-                channel = updatedChannel;
-            }
-
-            // If another Claim/Unclaim/Handoff happened while Discord was
-            // processing this edit, loop again and apply ONLY the latest state.
-            if (!latest || latest.version === targetVersion) {
+            if (
+                !latest ||
+                latest.version === targetVersion
+            ) {
                 return;
             }
         }
     })().finally(() => {
         syncWorkers.delete(channelId);
 
-        const desired = desiredStates.get(channelId);
-        if (!desired) return;
+        /*
+         * IMPORTANT:
+         * If the ticket was deleted/forgotten,
+         * DO NOT recreate another sync timer.
+         */
+        const desired =
+            desiredStates.get(channelId);
+
+        if (!desired) {
+            return;
+        }
 
         const nameMatches =
-            String(channel.name || '').toLowerCase() ===
-            String(desired.name || '').toLowerCase();
+            String(channel.name || '')
+                .toLowerCase() ===
+            String(desired.name || '')
+                .toLowerCase();
+
         const topicMatches =
-            String(channel.topic || '') === String(desired.topic || '');
+            String(channel.topic || '') ===
+            String(desired.topic || '');
 
         if (!nameMatches || !topicMatches) {
             scheduleSync(channel, 250);
@@ -170,6 +223,7 @@ async function runSyncWorker(channel) {
     });
 
     syncWorkers.set(channelId, worker);
+
     return worker;
 }
 
