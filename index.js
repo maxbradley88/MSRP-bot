@@ -42,6 +42,7 @@ const config = require('./tickets/ticketConfig');
 const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
 const ticketState = require('./tickets/ticketState');
 const ticketStatus = require('./tickets/ticketStatus');
+const { sendTicketCloseNotifications } = require('./tickets/ticketCloseMessage');
 
 
 
@@ -156,7 +157,7 @@ function isRulesQuestion(question) {
 function getRulesDeclineMessage() {
 
     return (
-        '# You Must Agree To The Rules Before Creating A Ticket\n\n' +
+        '# You Must Agree o The Rules Before Creating a Ticket\n\n' +
         'Welcome to our **Support Channel!** Here, you can receive assistance, report or appeal a decision, request an interview for a rank, and ask any questions you may have.\n\n' +
         'Our friendly and dedicated staff are here to help you, but we ask that you treat them with the same respect and courtesy they show you. To ensure our support system remains a **safe, fair, and welcoming environment** for everyone, please follow the rules below:\n\n' +
         '## 1. Remain respectful to staff\n' +
@@ -1243,70 +1244,10 @@ async function createTicketTranscript(channel) {
             'utf8'
         ),
         name:
-            `transcript-${safeChannelName}.txt`
+            `${safeChannelName}.txt`
     };
 }
 
-function sendCloseNotifications(ownerId, message, transcriptFile = null) {
-    return (async () => {
-        const tasks = [];
-
-        let logChannel =
-            client.channels.cache.get(CLOSE_LOG_CHANNEL_ID) || null;
-
-        if (!logChannel) {
-            try {
-                logChannel = await client.channels.fetch(
-                    CLOSE_LOG_CHANNEL_ID
-                );
-            } catch (error) {
-                console.error(
-                    '[CLOSE LOG CHANNEL FETCH ERROR]',
-                    error
-                );
-            }
-        }
-
-        const files = transcriptFile
-            ? [transcriptFile]
-            : [];
-
-        if (logChannel?.isTextBased()) {
-            tasks.push(
-                logChannel.send({
-                    content: message,
-                    files
-                })
-            );
-        }
-
-        if (ownerId) {
-            tasks.push(
-                (async () => {
-                    const user =
-                        client.users.cache.get(ownerId) ||
-                        await client.users.fetch(ownerId);
-
-                    await user.send({
-                        content: message,
-                        files
-                    });
-                })()
-            );
-        }
-
-        const results = await Promise.allSettled(tasks);
-
-        for (const result of results) {
-            if (result.status === 'rejected') {
-                console.error(
-                    '[CLOSE NOTIFICATION ERROR]',
-                    result.reason
-                );
-            }
-        }
-    })();
-}
 
 // ======================================================
 
@@ -1931,9 +1872,6 @@ client.on(
                             flags: MessageFlags.Ephemeral
                         });
 
-                        const closeMessage =
-                            `Ticket closed | ${reason}`;
-
                         let transcriptFile = null;
 
                         try {
@@ -1948,11 +1886,18 @@ client.on(
                             );
                         }
 
-                        void sendCloseNotifications(
+                        void sendTicketCloseNotifications({
+                            client,
+                            closeLogChannelId:
+                                CLOSE_LOG_CHANNEL_ID,
                             ownerId,
-                            closeMessage,
+                            closedByUserId:
+                                interaction.user.id,
+                            channelName:
+                                channel.name,
+                            reason,
                             transcriptFile
-                        );
+                        });
 
                         const auditReason = (
                             `MSRP ticket closed by ${interaction.user.username} ` +
