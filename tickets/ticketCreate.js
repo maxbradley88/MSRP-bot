@@ -135,9 +135,7 @@ async function createTicket(
 
     if (isReportsAppealsTicket) {
         // Reports & Appeals tickets:
-        // SS = cannot view
-        // SSS = neutral (/)
-        // R/A = neutral (/)
+        // ONLY R/A + SSS can view (plus creator + bot above/below).
         permissionOverwrites.push(
             {
                 id: supportRole.id,
@@ -145,20 +143,16 @@ async function createTicket(
             },
             {
                 id: seniorSupportRole.id,
-                allow: [],
-                deny: []
+                allow: [PermissionFlagsBits.ViewChannel]
             },
             {
                 id: reportsAppealsRole.id,
-                allow: [],
-                deny: []
+                allow: [PermissionFlagsBits.ViewChannel]
             }
         );
     } else if (isSeniorTicket) {
         // Senior Support tickets:
-        // SS = cannot view
-        // R/A = cannot view
-        // SSS = neutral (/)
+        // ONLY SSS can view (plus creator + bot above/below).
         permissionOverwrites.push(
             {
                 id: supportRole.id,
@@ -166,8 +160,7 @@ async function createTicket(
             },
             {
                 id: seniorSupportRole.id,
-                allow: [],
-                deny: []
+                allow: [PermissionFlagsBits.ViewChannel]
             },
             {
                 id: reportsAppealsRole.id,
@@ -176,19 +169,15 @@ async function createTicket(
         );
     } else {
         // Support tickets:
-        // R/A = cannot view
-        // SS = neutral (/)
-        // SSS = neutral (/)
+        // ONLY SS + SSS can view (plus creator + bot above/below).
         permissionOverwrites.push(
             {
                 id: supportRole.id,
-                allow: [],
-                deny: []
+                allow: [PermissionFlagsBits.ViewChannel]
             },
             {
                 id: seniorSupportRole.id,
-                allow: [],
-                deny: []
+                allow: [PermissionFlagsBits.ViewChannel]
             },
             {
                 id: reportsAppealsRole.id,

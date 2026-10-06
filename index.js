@@ -1895,6 +1895,8 @@ client.on(
                                 interaction.user.id,
                             channelName:
                                 channel.name,
+                            ticketTypeName:
+                                getTicketTypeName(channel),
                             reason,
                             transcriptFile
                         });

@@ -36,12 +36,24 @@ function getTicketNumber(channelName) {
     return parts.at(-1) || 'Unknown';
 }
 
+function safeCodeBlock(value) {
+    return String(value || 'No reason provided.')
+        .replace(/```/g, "''' ")
+        .trim();
+}
+
 function buildCloseContainer({
+    ticketTypeName,
     ticketNumber,
+    ownerId,
     closedByUserId,
+    closedAt,
     reason,
     transcriptFile
 }) {
+    const unixTime = Math.floor(closedAt / 1000);
+    const displayType = String(ticketTypeName || 'Support').trim();
+
     const container = new ContainerBuilder()
         .addMediaGalleryComponents(
             new MediaGalleryBuilder().addItems(
@@ -55,17 +67,14 @@ function buildCloseContainer({
         )
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                `## Ticket ${ticketNumber} Closed\n` +
-                `Closed by <@${closedByUserId}>`
+                `## ${displayType} Ticket ${ticketNumber}\n\n` +
+                `Opened: <@${ownerId}>\n` +
+                `Closed: <@${closedByUserId}>\n` +
+                `Date: <t:${unixTime}:F>`
             )
         )
         .addSeparatorComponents(
             new SeparatorBuilder().setDivider(true)
-        )
-        .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-                `**Reason for close:** ${reason}`
-            )
         );
 
     if (transcriptFile?.name) {
@@ -83,6 +92,14 @@ function buildCloseContainer({
     }
 
     container
+        .addSeparatorComponents(
+            new SeparatorBuilder().setDivider(true)
+        )
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `## Reason:\n\`\`\`text\n${safeCodeBlock(reason)}\n\`\`\``
+            )
+        )
         .addSeparatorComponents(
             new SeparatorBuilder().setDivider(true)
         )
@@ -119,9 +136,7 @@ function buildFiles(transcriptFile) {
 
 function buildPayload(options) {
     return {
-        components: [
-            buildCloseContainer(options)
-        ],
+        components: [buildCloseContainer(options)],
         files: buildFiles(options.transcriptFile),
         flags: MessageFlags.IsComponentsV2,
         allowedMentions: {
@@ -136,10 +151,12 @@ async function sendTicketCloseNotifications({
     ownerId,
     closedByUserId,
     channelName,
+    ticketTypeName,
     reason,
     transcriptFile = null
 }) {
     const ticketNumber = getTicketNumber(channelName);
+    const closedAt = Date.now();
     const tasks = [];
 
     let logChannel =
@@ -158,15 +175,20 @@ async function sendTicketCloseNotifications({
         }
     }
 
+    const payloadOptions = {
+        ticketTypeName,
+        ticketNumber,
+        ownerId,
+        closedByUserId,
+        closedAt,
+        reason,
+        transcriptFile
+    };
+
     if (logChannel?.isTextBased()) {
         tasks.push(
             logChannel.send(
-                buildPayload({
-                    ticketNumber,
-                    closedByUserId,
-                    reason,
-                    transcriptFile
-                })
+                buildPayload(payloadOptions)
             )
         );
     }
@@ -179,12 +201,7 @@ async function sendTicketCloseNotifications({
                     await client.users.fetch(ownerId);
 
                 await user.send(
-                    buildPayload({
-                        ticketNumber,
-                        closedByUserId,
-                        reason,
-                        transcriptFile
-                    })
+                    buildPayload(payloadOptions)
                 );
             })()
         );
