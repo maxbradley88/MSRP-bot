@@ -1778,8 +1778,8 @@ client.on(
                         return;
                     }
 
-                    // Modal submits must be acknowledged immediately. All slow
-                    // Discord category/name work happens after this defer.
+                    // Acknowledge the modal immediately so Discord never
+                    // reports "interaction failed" while the category move runs.
                     try {
                         await interaction.deferReply({
                             flags: MessageFlags.Ephemeral
@@ -1873,7 +1873,7 @@ client.on(
                         return;
                     }
 
-                    // Use the REAL category, never optimistic state.
+                    // Always use the real Discord parent for handoff decisions.
                     const currentDepartment =
                         getTicketDepartmentFromParentId(
                             channel.parentId
@@ -1909,18 +1909,21 @@ client.on(
                         channel.id
                     );
 
+                    // The interaction is now safely acknowledged. The user no
+                    // longer has to stare at Discord's native "thinking" state.
                     await interaction.editReply({
                         content:
                             `⏳ Hand off accepted. Moving ticket to ${destination.name}...`
                     });
 
-                    // Run the Discord category move separately from the slower
-                    // rename/topic edit. A channel-name rate limit must never
-                    // block the ticket from moving departments.
                     void (async () => {
+                        let movedChannel = null;
+
                         try {
-                            let movedChannel = null;
-                            let moveError = null;
+                            // CATEGORY MOVE IS THE ONLY CRITICAL HANDOFF STEP.
+                            // Do not bundle it with rename/topic work because
+                            // channel-name rate limits can otherwise block the move.
+                            let lastMoveError = null;
 
                             for (
                                 let attempt = 1;
@@ -1938,17 +1941,21 @@ client.on(
                                             }
                                         );
 
-                                    moveError = null;
+                                    lastMoveError = null;
                                     break;
                                 } catch (error) {
-                                    moveError = error;
+                                    lastMoveError = error;
+                                    console.error(
+                                        `[HANDOFF MOVE ERROR - ATTEMPT ${attempt}]`,
+                                        error
+                                    );
 
                                     if (attempt < 3) {
                                         await new Promise(
                                             resolve =>
                                                 setTimeout(
                                                     resolve,
-                                                    400 * attempt
+                                                    750 * attempt
                                                 )
                                         );
                                     }
@@ -1956,67 +1963,38 @@ client.on(
                             }
 
                             if (!movedChannel) {
+                                try {
+                                    await interaction.editReply({
+                                        content:
+                                            '❌ Discord could not move this ticket to the new department. The ticket has not been unclaimed or renamed.'
+                                    });
+                                } catch {}
+
                                 console.error(
-                                    '[HANDOFF CATEGORY MOVE ERROR]',
-                                    moveError
+                                    '[HANDOFF CATEGORY MOVE FAILED]',
+                                    lastMoveError
                                 );
-
-                                try {
-                                    await interaction.editReply({
-                                        content:
-                                            '❌ Discord could not move this ticket to the new department. Nothing was unclaimed or renamed; please try again.'
-                                    });
-                                } catch {}
-
                                 return;
                             }
 
-                            // Confirm the real Discord parent before changing
-                            // claim state or reporting success.
-                            let confirmedChannel =
-                                movedChannel;
-
-                            try {
-                                const fetched =
-                                    await channel.guild.channels.fetch(
-                                        channel.id
-                                    );
-
-                                if (fetched) {
-                                    confirmedChannel =
-                                        fetched;
-                                }
-                            } catch {}
-
-                            if (
-                                confirmedChannel.parentId !==
-                                destination.categoryId
-                            ) {
-                                try {
-                                    await interaction.editReply({
-                                        content:
-                                            '❌ Discord did not confirm the category move. The ticket has been left claimed so you can safely try again.'
-                                    });
-                                } catch {}
-
-                                return;
-                            }
-
-                            // Only NOW unclaim the ticket, after the category
-                            // move has genuinely succeeded.
-                            const newTopic =
+                            // A successful setParent() is authoritative. Do not
+                            // immediately refetch and risk reading stale parent data.
+                            const existingTopic =
                                 String(
                                     getEffectiveChannelTopic(
                                         channel
                                     ) || ''
-                                ).replace(
-                                    /\|claimed-by:\d+/g,
+                                );
+
+                            const newTopic =
+                                existingTopic.replace(
+                                    /(?:^|\|)claimed-by:\d+/g,
                                     ''
                                 );
 
                             const version =
                                 applyOptimisticTicketState(
-                                    confirmedChannel,
+                                    movedChannel,
                                     {
                                         claimedBy: null,
                                         departmentKey:
@@ -2025,6 +2003,19 @@ client.on(
                                         topic: newTopic
                                     }
                                 );
+
+                            // Report the successful department move immediately.
+                            try {
+                                await interaction.editReply({
+                                    content:
+                                        `✅ Ticket handed off to ${destination.name}.`
+                                });
+                            } catch (error) {
+                                console.error(
+                                    '[HANDOFF SUCCESS REPLY ERROR]',
+                                    error
+                                );
+                            }
 
                             const ownerMention =
                                 ownerId
@@ -2054,69 +2045,77 @@ client.on(
                                         .join('\n');
                             }
 
-                            // Every successful handoff gets a channel message,
-                            // independent of the slower cosmetic rename.
-                            await sendTicketActionMessage(
-                                confirmedChannel,
-                                message,
-                                {
-                                    users:
-                                        ownerId
-                                            ? [ownerId]
-                                            : [],
-                                    roles:
-                                        destination.roleId
-                                            ? [destination.roleId]
-                                            : []
-                                },
-                                'HANDOFF'
-                            );
-
+                            // Notification failure must NEVER turn a successful
+                            // handoff into "something went wrong".
                             try {
-                                await interaction.editReply({
-                                    content:
-                                        `✅ Ticket handed off to ${destination.name}.`
-                                });
-                            } catch {}
+                                const handoffMessage =
+                                    await sendTicketActionMessage(
+                                        movedChannel,
+                                        message,
+                                        {
+                                            users:
+                                                ownerId
+                                                    ? [ownerId]
+                                                    : [],
+                                            roles:
+                                                destination.roleId
+                                                    ? [destination.roleId]
+                                                    : []
+                                        },
+                                        'HANDOFF'
+                                    );
 
-                            // Rename + persist unclaimed topic separately.
-                            // Discord may throttle this when staff test rapid
-                            // claim/unclaim cycles, but it cannot stop the move.
-                            void persistTicketChannelEdit(
-                                confirmedChannel,
-                                {
-                                    name: newName,
-                                    topic: newTopic,
-                                    reason:
-                                        `Ticket handoff state updated by ${interaction.user.tag}`
-                                },
-                                version,
-                                'HANDOFF STATE'
-                            ).then(async updatedChannel => {
-                                if (!updatedChannel) {
-                                    try {
-                                        await interaction.followUp({
-                                            content:
-                                                '⚠️ The ticket moved and was unclaimed, but Discord is still delaying the channel title update.',
-                                            flags:
-                                                MessageFlags.Ephemeral
-                                        });
-                                    } catch {}
+                                if (!handoffMessage) {
+                                    console.error(
+                                        '[HANDOFF MESSAGE FAILED] No message was returned.'
+                                    );
                                 }
-                            });
+                            } catch (error) {
+                                console.error(
+                                    '[HANDOFF MESSAGE FATAL ERROR]',
+                                    error
+                                );
+                            }
+
+                            // Persist the unclaimed topic + requested ticket name
+                            // separately. If Discord delays a rename, the actual
+                            // department move and handoff notification still stand.
+                            try {
+                                void persistTicketChannelEdit(
+                                    movedChannel,
+                                    {
+                                        name: newName,
+                                        topic: newTopic,
+                                        reason:
+                                            `Ticket handoff state updated by ${interaction.user.tag}`
+                                    },
+                                    version,
+                                    'HANDOFF STATE'
+                                );
+                            } catch (error) {
+                                console.error(
+                                    '[HANDOFF STATE QUEUE ERROR]',
+                                    error
+                                );
+                            }
 
                         } catch (error) {
                             console.error(
-                                '[HANDOFF MODAL ERROR]',
+                                '[HANDOFF UNEXPECTED ERROR]',
                                 error
                             );
 
-                            try {
-                                await interaction.editReply({
-                                    content:
-                                        '❌ Something went wrong while handing off this ticket. Please try again.'
-                                });
-                            } catch {}
+                            // Only show a generic failure when the category move
+                            // itself never succeeded. Post-move notification/title
+                            // errors are logged instead of lying to the user.
+                            if (!movedChannel) {
+                                try {
+                                    await interaction.editReply({
+                                        content:
+                                            '❌ Something went wrong while moving this ticket. Please try again.'
+                                    });
+                                } catch {}
+                            }
                         } finally {
                             activeHandoffChannels.delete(
                                 channel.id
