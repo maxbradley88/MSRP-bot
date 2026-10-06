@@ -16,6 +16,7 @@ const {
 
 const config = require('./ticketConfig');
 const ticketStatus = require('./ticketStatus');
+const ticketPermissions = require('./ticketPermissions');
 
 const {
     setupTicketIcons,
@@ -110,93 +111,20 @@ async function createTicket(
 
     await setupTicketIcons(guild);
 
-    const supportRole = await guild.roles.fetch(config.supportStaffRoleId);
-    const seniorSupportRole = await guild.roles.fetch(config.seniorSupportStaffRoleId);
-    const reportsAppealsRole = await guild.roles.fetch(config.reportsAppealsStaffRoleId);
+    const departmentKey =
+        isReportsAppealsTicket
+            ? 'reports_appeals'
+            : isSeniorTicket
+                ? 'senior'
+                : 'support';
 
-    if (!supportRole || !seniorSupportRole || !reportsAppealsRole) {
-        throw new Error('One or more ticket staff roles could not be found.');
-    }
-
-    const permissionOverwrites = [
-        {
-            id: guild.roles.everyone.id,
-            deny: [PermissionFlagsBits.ViewChannel]
-        },
-        {
-            id: user.id,
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-            ]
-        }
-    ];
-
-    if (isReportsAppealsTicket) {
-        // Reports & Appeals tickets:
-        // ONLY R/A + SSS can view (plus creator + bot above/below).
-        permissionOverwrites.push(
-            {
-                id: supportRole.id,
-                deny: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-                id: seniorSupportRole.id,
-                allow: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-                id: reportsAppealsRole.id,
-                allow: [PermissionFlagsBits.ViewChannel]
-            }
+    const permissionOverwrites =
+        ticketPermissions.buildTicketPermissionOverwrites(
+            guild,
+            user.id,
+            departmentKey,
+            null
         );
-    } else if (isSeniorTicket) {
-        // Senior Support tickets:
-        // ONLY SSS can view (plus creator + bot above/below).
-        permissionOverwrites.push(
-            {
-                id: supportRole.id,
-                deny: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-                id: seniorSupportRole.id,
-                allow: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-                id: reportsAppealsRole.id,
-                deny: [PermissionFlagsBits.ViewChannel]
-            }
-        );
-    } else {
-        // Support tickets:
-        // ONLY SS + SSS can view (plus creator + bot above/below).
-        permissionOverwrites.push(
-            {
-                id: supportRole.id,
-                allow: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-                id: seniorSupportRole.id,
-                allow: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-                id: reportsAppealsRole.id,
-                deny: [PermissionFlagsBits.ViewChannel]
-            }
-        );
-    }
-
-    // Keep the bot's current permissions unchanged.
-    permissionOverwrites.push({
-        id: guild.members.me.id,
-        allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.ManageChannels,
-            PermissionFlagsBits.ManageMessages
-        ]
-    });
 
     const ticketNumber =
         guild.channels.cache.filter(

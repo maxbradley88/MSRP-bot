@@ -42,6 +42,7 @@ const config = require('./tickets/ticketConfig');
 const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
 const ticketState = require('./tickets/ticketState');
 const ticketStatus = require('./tickets/ticketStatus');
+const ticketPermissions = require('./tickets/ticketPermissions');
 const { sendTicketCloseNotifications } = require('./tickets/ticketCloseMessage');
 
 
@@ -2018,6 +2019,15 @@ client.on(
                         }
                     );
 
+                    await ticketPermissions.applyTicketPermissions(
+                        channel,
+                        {
+                            claimedBy: null,
+                            reason:
+                                `Ticket unclaimed by ${interaction.user.tag}`
+                        }
+                    );
+
                     void ticketStatus
                         .setClaimButtonState(channel, false)
                         .catch(error => {
@@ -2598,6 +2608,15 @@ if (
                 reason:
                     `Ticket claimed by ${interaction.user.tag}`,
                 delay: 0
+            }
+        );
+
+        await ticketPermissions.applyTicketPermissions(
+            channel,
+            {
+                claimedBy: userId,
+                reason:
+                    `Ticket claimed by ${interaction.user.tag}`
             }
         );
 

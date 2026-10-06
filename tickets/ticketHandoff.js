@@ -13,6 +13,19 @@ const {
 const config = require('./ticketConfig');
 const ticketState = require('./ticketState');
 const ticketStatus = require('./ticketStatus');
+const ticketPermissions = require('./ticketPermissions');
+
+let testingOverrides = {
+    allowTicketCreatorStaffActions: false
+};
+
+try {
+    testingOverrides = require('./testingOverrides');
+} catch (error) {
+    if (error?.code !== 'MODULE_NOT_FOUND') {
+        console.warn('[HANDOFF TESTING OVERRIDES ERROR]', error);
+    }
+}
 
 const activeHandoffs = new Set();
 
@@ -56,9 +69,14 @@ function hasReportsRole(member) {
 }
 
 function ownerTestingAllowed(member, ownerId, userId) {
-    // Production mode: ticket creators cannot use staff actions
-    // on their own ticket.
-    return false;
+    if (ownerId !== userId) return false;
+    if (testingOverrides.allowTicketCreatorStaffActions !== true) return false;
+
+    return (
+        hasSupportRole(member) ||
+        hasSeniorRole(member) ||
+        hasReportsRole(member)
+    );
 }
 
 function getDepartmentFromKey(key) {
@@ -476,6 +494,20 @@ async function submitHandoff(interaction) {
 
         // Future claim/unclaim actions should read the confirmed Discord state.
         ticketState.forgetTicket(movedChannel.id);
+
+        // Rebuild staff visibility/write permissions for the NEW department.
+        // The previous department immediately loses access, the destination
+        // department can view but cannot type until someone claims, and SSS
+        // keeps full access everywhere.
+        await ticketPermissions.applyTicketPermissions(
+            movedChannel,
+            {
+                departmentKey: destination.key,
+                claimedBy: null,
+                reason:
+                    `Ticket handed off by ${interaction.user.tag}`
+            }
+        );
 
         try {
             await ticketStatus.setTicketControlState(
