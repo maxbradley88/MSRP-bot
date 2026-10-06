@@ -56,6 +56,10 @@ const client = new Client({
 
 
 
+const activeClaimChannels = new Set();
+
+
+
 // ======================================================
 
 // HELPERS
@@ -774,110 +778,81 @@ client.on(
 
 
 
-                    const claimedBy =
-
-                        getClaimedUserId(
-
+                    const ownerId =
+                        getTicketOwnerId(
                             channel
-
                         );
 
-
+                    const claimedBy =
+                        getClaimedUserId(
+                            channel
+                        );
 
                     const isSenior =
-
                         isSeniorSupportMember(
-
                             interaction.member
-
                         );
 
-
-
                     if (
-
-                        !isSupportMember(
-
-                            interaction.member
-
-                        )
-
-                    ) {
-
-
-
-                        await interaction.reply({
-
-                            content:
-
-                                '❌ Only a support member can use this.',
-
-                            flags:
-
-                                MessageFlags.Ephemeral
-
-                        });
-
-
-
-                        return;
-
-                    }
-
-
-
-                    if (!claimedBy) {
-
-
-
-                        await interaction.reply({
-
-                            content:
-
-                                '❌ This ticket must be claimed before it can be handed off.',
-
-                            flags:
-
-                                MessageFlags.Ephemeral
-
-                        });
-
-
-
-                        return;
-
-                    }
-
-
-
-                    if (
-
-                        !isSenior &&
-
-                        claimedBy !==
-
+                        ownerId ===
                         interaction.user.id
-
                     ) {
 
-
-
                         await interaction.reply({
-
                             content:
-
-                                '❌ You can only hand off tickets that you have claimed.',
-
+                                '❌ The user who created the ticket cannot use staff ticket buttons.',
                             flags:
-
                                 MessageFlags.Ephemeral
-
                         });
 
+                        return;
+                    }
 
+                    if (
+                        !isSupportMember(
+                            interaction.member
+                        )
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ Only a support member can use this.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
 
                         return;
+                    }
 
+                    if (
+                        !isSenior &&
+                        !claimedBy
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ You must claim this ticket before you can hand it off.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+                        return;
+                    }
+
+                    if (
+                        !isSenior &&
+                        claimedBy !==
+                        interaction.user.id
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ You can only hand off tickets that you have claimed.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+                        return;
                     }
 
 
@@ -1682,6 +1657,34 @@ client.on(
 
 
 
+                    const ownerId =
+                        getTicketOwnerId(
+                            channel
+                        );
+
+
+
+                    if (
+                        ownerId ===
+                        userId
+                    ) {
+
+
+
+                        await interaction.reply({
+                            content:
+                                '❌ The user who created the ticket cannot use staff ticket buttons.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+
+
+                        return;
+                    }
+
+
+
                     if (
 
                         !isSupportMember(
@@ -1784,16 +1787,37 @@ client.on(
 
 
 
+                    if (
+                        activeClaimChannels.has(
+                            channel.id
+                        )
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ Another claim action is already being processed for this ticket. Please try again.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+                        return;
+                    }
+
+                    activeClaimChannels.add(
+                        channel.id
+                    );
+
+
+
                     try {
 
 
 
-                        await interaction.deferReply({
-
+                        await interaction.reply({
+                            content:
+                                'Claiming ticket...',
                             flags:
-
                                 MessageFlags.Ephemeral
-
                         });
 
 
@@ -1835,16 +1859,6 @@ client.on(
                             return;
 
                         }
-
-
-
-                        const ownerId =
-
-                            getTicketOwnerId(
-
-                                channel
-
-                            );
 
 
 
@@ -2068,6 +2082,12 @@ client.on(
 
                         } catch {}
 
+                    } finally {
+
+                        activeClaimChannels.delete(
+                            channel.id
+                        );
+
                     }
 
 
@@ -2132,78 +2152,83 @@ client.on(
 
 
 
-                    const claimedBy =
-
-                        getClaimedUserId(
-
+                    const ownerId =
+                        getTicketOwnerId(
                             channel
-
                         );
-
-
 
                     const isSenior =
-
                         isSeniorSupportMember(
-
                             interaction.member
-
                         );
 
-
-
-                    if (!claimedBy) {
-
-
-
-                        await interaction.reply({
-
-                            content:
-
-                                '❌ This ticket has not been claimed yet.',
-
-                            flags:
-
-                                MessageFlags.Ephemeral
-
-                        });
-
-
-
-                        return;
-
-                    }
-
-
-
                     if (
-
-                        !isSenior &&
-
-                        claimedBy !==
-
+                        ownerId ===
                         interaction.user.id
-
                     ) {
 
-
-
                         await interaction.reply({
-
                             content:
-
-                                '❌ You can only close tickets that you have claimed.',
-
+                                '❌ The user who created the ticket cannot use staff ticket buttons.',
                             flags:
-
                                 MessageFlags.Ephemeral
-
                         });
 
+                        return;
+                    }
 
+                    if (
+                        !isSupportMember(
+                            interaction.member
+                        )
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ Only a member of the MSRP support team can use this.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
 
                         return;
+                    }
 
+                    const claimedBy =
+                        getClaimedUserId(
+                            channel
+                        );
+
+                    // Senior Support can close any ticket, claimed or unclaimed.
+                    // SS / R&A may only close a ticket they personally claimed.
+                    if (
+                        !isSenior &&
+                        !claimedBy
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ You must claim this ticket before you can close it.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+                        return;
+                    }
+
+                    if (
+                        !isSenior &&
+                        claimedBy !==
+                        interaction.user.id
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ You can only close tickets that you have claimed.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+                        return;
                     }
 
 
@@ -2300,102 +2325,84 @@ client.on(
 
 
 
-                    // ------------------------------------------
-
-                    // READ CLAIM
-
-                    // ------------------------------------------
-
-
+                    const ownerId =
+                        getTicketOwnerId(
+                            channel
+                        );
 
                     const claimedBy =
-
                         getClaimedUserId(
-
                             channel
-
                         );
-
-
 
                     const isSenior =
-
                         isSeniorSupportMember(
-
                             interaction.member
-
                         );
 
-
-
-                    console.log(
-
-                        `[HANDOFF BUTTON] User=${interaction.user.id} ClaimedBy=${claimedBy || 'NONE'} Senior=${isSenior}`
-
-                    );
-
-
-
-                    // ------------------------------------------
-
-                    // PERMISSION CHECKS
-
-                    // ------------------------------------------
-
-
-
-                    if (!claimedBy) {
-
-
-
-                        await interaction.reply({
-
-                            content:
-
-                                '❌ This ticket must be claimed before it can be handed off.',
-
-                            flags:
-
-                                MessageFlags.Ephemeral
-
-                        });
-
-
-
-                        return;
-
-                    }
-
-
-
                     if (
-
-                        !isSenior &&
-
-                        claimedBy !==
-
+                        ownerId ===
                         interaction.user.id
-
                     ) {
 
-
-
                         await interaction.reply({
-
                             content:
-
-                                '❌ You can only hand off tickets that you have claimed.',
-
+                                '❌ The user who created the ticket cannot use staff ticket buttons.',
                             flags:
-
                                 MessageFlags.Ephemeral
-
                         });
 
+                        return;
+                    }
 
+                    if (
+                        !isSupportMember(
+                            interaction.member
+                        )
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ Only a member of the MSRP support team can use this.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
 
                         return;
+                    }
 
+                    // Senior Support may hand off any ticket, even if it is
+                    // unclaimed or currently claimed by another staff member.
+                    // SS / R&A may only hand off a ticket they personally claimed.
+                    if (
+                        !isSenior &&
+                        !claimedBy
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ You must claim this ticket before you can hand it off.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+                        return;
+                    }
+
+                    if (
+                        !isSenior &&
+                        claimedBy !==
+                        interaction.user.id
+                    ) {
+
+                        await interaction.reply({
+                            content:
+                                '❌ You can only hand off tickets that you have claimed.',
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+                        return;
                     }
 
 
