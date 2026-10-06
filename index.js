@@ -45,44 +45,6 @@ const ticketStatus = require('./tickets/ticketStatus');
 
 
 
-let testingOverrides = {
-
-    allowTicketCreatorStaffActions: false
-
-};
-
-
-
-try {
-
-    testingOverrides = require(
-
-        './tickets/testingOverrides'
-
-    );
-
-} catch (error) {
-
-    if (
-
-        error?.code !== 'MODULE_NOT_FOUND'
-
-    ) {
-
-        console.warn(
-
-            '[TESTING OVERRIDES ERROR]',
-
-            error
-
-        );
-
-    }
-
-}
-
-
-
 const client = new Client({
 
     intents: [
@@ -169,20 +131,50 @@ function isTicketOwnerStaffTestingAllowed(
 
 ) {
 
-    return (
-
-        ownerId === userId &&
-
-        testingOverrides
-
-            .allowTicketCreatorStaffActions === true &&
-
-        isSupportMember(member)
-
-    );
+    // Production mode: ticket creators can never use staff ticket actions
+    // on their own ticket, even if they hold a staff role.
+    return false;
 
 }
 
+
+function isRulesQuestion(question) {
+
+    const text = [
+        question?.id,
+        question?.label,
+        question?.placeholder
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+    return text.includes('rule');
+}
+
+
+function getRulesDeclineMessage() {
+
+    return (
+        '# You Must Agree o The Rules Before Creating a Ticket\n\n' +
+        'Welcome to our **Support Channel!** Here, you can receive assistance, report or appeal a decision, request an interview for a rank, and ask any questions you may have.\n\n' +
+        'Our friendly and dedicated staff are here to help you, but we ask that you treat them with the same respect and courtesy they show you. To ensure our support system remains a **safe, fair, and welcoming environment** for everyone, please follow the rules below:\n\n' +
+        '## 1. Remain respectful to staff\n' +
+        'Please communicate with all staff members in a polite and respectful manner.\n\n' +
+        '## 2. Do not ping staff\n' +
+        'Please do not directly ping, mention, or mass-mention staff members regarding your ticket.\n\n' +
+        '## 3. Cooperate with staff requests\n' +
+        'Please cooperate with reasonable requests made by our staff while your ticket is being handled.\n\n' +
+        '## 4. Remember that staff are people too\n' +
+        'Our staff volunteer their time to assist the community. Please be patient and respectful while they work to resolve your request.\n\n' +
+        '## ⚠️ Failure to Follow the Rules\n' +
+        'Failure to comply with any of the above rules may result in your **ticket being voided and the situation being referred for further investigation.**\n\n' +
+        'By selecting **Yes** when creating a ticket, you confirm that you have read, understood, and agree to follow the rules of our Support System.\n\n' +
+        '---\n\n' +
+        '## MSRP Foundership Team'
+    );
+
+}
 
 
 function getTicketOwnerId(channel) {
@@ -1599,9 +1591,29 @@ client.on(
 
 
 
+                        const configuredOptions =
+                            Array.isArray(question.options)
+                                ? [...question.options]
+                                : [];
+
+                        if (
+                            isRulesQuestion(question) &&
+                            !configuredOptions.some(
+                                option =>
+                                    String(option.value || '')
+                                        .toLowerCase() ===
+                                    'no'
+                            )
+                        ) {
+                            configuredOptions.push({
+                                label: 'No',
+                                value: 'no'
+                            });
+                        }
+
                         const options =
 
-                            question.options.map(
+                            configuredOptions.map(
 
                                 option => {
 
@@ -2257,6 +2269,27 @@ client.on(
 
                     }
 
+
+
+                    const rulesQuestion =
+                        (typeConfig.questions || [])
+                            .find(isRulesQuestion);
+
+                    if (
+                        rulesQuestion &&
+                        String(
+                            answers[rulesQuestion.id] || ''
+                        ).toLowerCase() === 'no'
+                    ) {
+                        await interaction.reply({
+                            content:
+                                getRulesDeclineMessage(),
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+
+                        return;
+                    }
 
 
                     try {

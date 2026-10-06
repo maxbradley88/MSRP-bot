@@ -14,18 +14,6 @@ const config = require('./ticketConfig');
 const ticketState = require('./ticketState');
 const ticketStatus = require('./ticketStatus');
 
-let testingOverrides = {
-    allowTicketCreatorStaffActions: false
-};
-
-try {
-    testingOverrides = require('./testingOverrides');
-} catch (error) {
-    if (error?.code !== 'MODULE_NOT_FOUND') {
-        console.warn('[HANDOFF TESTING OVERRIDES ERROR]', error);
-    }
-}
-
 const activeHandoffs = new Set();
 
 function hasBeenHandedOff(channel) {
@@ -68,14 +56,9 @@ function hasReportsRole(member) {
 }
 
 function ownerTestingAllowed(member, ownerId, userId) {
-    if (ownerId !== userId) return false;
-    if (testingOverrides.allowTicketCreatorStaffActions !== true) return false;
-
-    return (
-        hasSupportRole(member) ||
-        hasSeniorRole(member) ||
-        hasReportsRole(member)
-    );
+    // Production mode: ticket creators cannot use staff actions
+    // on their own ticket.
+    return false;
 }
 
 function getDepartmentFromKey(key) {
