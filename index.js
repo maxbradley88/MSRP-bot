@@ -2484,10 +2484,15 @@ if (
 
     // Acknowledge immediately so Discord never sits
     // on "Melbourne State Roleplay is thinking..."
-    await interaction.deferReply({
-        flags: MessageFlags.Ephemeral
-    });
+await interaction.deferReply({
+    flags: MessageFlags.Ephemeral
+});
 
+// Immediately replace Discord's "thinking..." message.
+// The channel rename can continue after this.
+await interaction.editReply({
+    content: '⏳ Claiming ticket...'
+});
     if (
         !channel ||
         !channel.isTextBased()
