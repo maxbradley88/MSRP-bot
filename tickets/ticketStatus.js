@@ -17,7 +17,7 @@ function componentHasCustomId(component, customId) {
         raw.components.some(child => componentHasCustomId(child, customId));
 }
 
-function mutateTicketControls(component, claimed) {
+function mutateTicketControls(component, claimed, handedOff = false) {
     if (!component) return component;
 
     const raw = typeof component.toJSON === 'function'
@@ -31,12 +31,14 @@ function mutateTicketControls(component, claimed) {
     }
 
     if (raw.custom_id === 'ticket_handoff') {
-        raw.style = ButtonStyle.Primary;
+        raw.style = handedOff
+            ? ButtonStyle.Secondary
+            : ButtonStyle.Primary;
     }
 
     if (Array.isArray(raw.components)) {
         raw.components = raw.components.map(child =>
-            mutateTicketControls(child, claimed)
+            mutateTicketControls(child, claimed, handedOff)
         );
     }
 
@@ -104,7 +106,7 @@ async function ensurePinned(message) {
     }
 }
 
-async function setClaimButtonState(channel, claimed) {
+async function setTicketControlState(channel, claimed, handedOff = false) {
     // One-time migration from the old channel-name status system.
     // Claim/Unclaim will never add this prefix again.
     if (/^claimed-/i.test(String(channel?.name || ''))) {
@@ -133,7 +135,7 @@ async function setClaimButtonState(channel, claimed) {
     }
 
     const components = message.components.map(component =>
-        mutateTicketControls(component, claimed)
+        mutateTicketControls(component, claimed, handedOff)
     );
 
     await message.edit({ components });
@@ -142,8 +144,34 @@ async function setClaimButtonState(channel, claimed) {
     return true;
 }
 
+async function setClaimButtonState(channel, claimed) {
+    const handedOff = /(?:^|\|)handed-off:1(?:\||$)/.test(
+        String(channel?.topic || '')
+    );
+
+    return setTicketControlState(
+        channel,
+        claimed,
+        handedOff
+    );
+}
+
+async function setHandoffButtonState(channel, handedOff) {
+    const claimed = /(?:^|\|)claimed-by:\d+/.test(
+        String(channel?.topic || '')
+    );
+
+    return setTicketControlState(
+        channel,
+        claimed,
+        handedOff
+    );
+}
+
 module.exports = {
     rememberTicketMessage,
     findTicketMessage,
-    setClaimButtonState
+    setClaimButtonState,
+    setHandoffButtonState,
+    setTicketControlState
 };

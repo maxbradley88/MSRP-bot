@@ -28,6 +28,27 @@ try {
 
 const activeHandoffs = new Set();
 
+function hasBeenHandedOff(channel) {
+    const topic = ticketState.getEffectiveTopic?.(channel) || channel?.topic || '';
+    return /(?:^|\|)handed-off:1(?:\||$)/.test(String(topic));
+}
+
+function buildHandedOffTopic(channel) {
+    let topic = String(
+        ticketState.getEffectiveTopic?.(channel) ||
+        channel?.topic ||
+        ''
+    );
+
+    topic = topic
+        .replace(/(?:^|\|)claimed-by:\d+/g, '')
+        .replace(/(?:^|\|)handed-off:1/g, '')
+        .replace(/^\|+|\|+$/g, '')
+        .replace(/\|{2,}/g, '|');
+
+    return `${topic}${topic ? '|' : ''}handed-off:1`;
+}
+
 function getOwnerId(channel) {
     const match = String(channel?.topic || '').match(/(?:^|\|)ticket-owner:(\d+)/);
     return match ? match[1] : null;
@@ -319,6 +340,14 @@ async function openHandoffModal(interaction) {
         return;
     }
 
+    if (hasBeenHandedOff(channel)) {
+        await interaction.reply({
+            content: 'This ticket has already been handed off',
+            flags: MessageFlags.Ephemeral
+        });
+        return;
+    }
+
     const permission = checkPermission(interaction);
 
     if (!permission.allowed) {
@@ -392,6 +421,13 @@ async function submitHandoff(interaction) {
         flags: MessageFlags.Ephemeral
     });
 
+    if (hasBeenHandedOff(channel)) {
+        await interaction.editReply({
+            content: 'This ticket has already been handed off'
+        });
+        return;
+    }
+
     const permission = checkPermission(interaction);
 
     if (!permission.allowed) {
@@ -444,28 +480,25 @@ async function submitHandoff(interaction) {
             content: `✅ Hand off accepted. Transferring to ${destination.name}...`
         });
 
-        // The category move is the only critical operation. If it fails, do
-        // not unclaim or rename the ticket.
-const movedChannel = await channel.edit({
-    parent: destination.categoryId,
-    reason: `Ticket handed off by ${interaction.user.tag}`
-});
+        // One Discord edit does all critical handoff state at once:
+        // move department + unclaim + permanently mark as handed off.
+        // This avoids extra queued channel edits after the move.
+        ticketState.forgetTicket(channel.id);
 
-        // ONE shared state system now owns BOTH the automatic unclaim and the
-        // requested rename. Any older Claim/Unclaim state is superseded here.
-        ticketState.handoffTicketState(
-            movedChannel,
-            null,
-            {
-                reason: `Ticket handed off by ${interaction.user.tag}`,
-                delay: 0
-            }
-        );
+        const movedChannel = await channel.edit({
+            parent: destination.categoryId,
+            topic: buildHandedOffTopic(channel),
+            reason: `Ticket handed off by ${interaction.user.tag}`
+        });
+
+        // Future claim/unclaim actions should read the confirmed Discord state.
+        ticketState.forgetTicket(movedChannel.id);
 
         try {
-            await ticketStatus.setClaimButtonState(
+            await ticketStatus.setTicketControlState(
                 movedChannel,
-                false
+                false,
+                true
             );
         } catch (statusError) {
             console.error(
