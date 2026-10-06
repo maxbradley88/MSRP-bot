@@ -40,6 +40,7 @@ const { createTicket } = require('./tickets/ticketCreate');
 
 const config = require('./tickets/ticketConfig');
 const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
+const ticketState = require('./tickets/ticketState');
 
 
 
@@ -225,13 +226,7 @@ function getClaimedUserIdFromTopic(topic) {
 }
 
 function getClaimedUserId(channel) {
-    if (!channel) return null;
-
-    if (optimisticClaimStates.has(channel.id)) {
-        return optimisticClaimStates.get(channel.id);
-    }
-
-    return getClaimedUserIdFromTopic(channel.topic);
+    return ticketState.getClaimedUserId(channel);
 }
 
 function getTicketTypeName(channel) {
@@ -337,23 +332,11 @@ function stripClaimedPrefix(channelName) {
 }
 
 function getEffectiveChannelName(channel) {
-    if (!channel) return '';
-
-    if (optimisticChannelNames.has(channel.id)) {
-        return optimisticChannelNames.get(channel.id);
-    }
-
-    return channel.name || '';
+    return ticketState.getEffectiveName(channel);
 }
 
 function getEffectiveChannelTopic(channel) {
-    if (!channel) return '';
-
-    if (optimisticChannelTopics.has(channel.id)) {
-        return optimisticChannelTopics.get(channel.id);
-    }
-
-    return channel.topic || '';
+    return ticketState.getEffectiveTopic(channel);
 }
 
 function canRegularStaffUseTicketDepartment(member, channel) {
@@ -1500,14 +1483,7 @@ client.on(
 
             if (
                 await handleTicketHandoffInteraction(
-                    interaction,
-                    {
-                        getClaimedUserId,
-                        prepareForHandoff:
-                            prepareTicketForHandoff,
-                        syncAfterHandoff:
-                            syncTicketStateAfterHandoff
-                    }
+                    interaction
                 )
             ) {
                 return;
@@ -2071,27 +2047,16 @@ client.on(
                                 ?.trim() || '';
                     } catch {}
 
-                    const newName =
-                        stripClaimedPrefix(
-                            getEffectiveChannelName(channel)
-                        );
-
-                    const newTopic =
-                        String(getEffectiveChannelTopic(channel) || '')
-                            .replace(
-                                /\|claimed-by:\d+/g,
-                                ''
-                            );
-
-                    const version =
-                        applyOptimisticTicketState(
-                            channel,
-                            {
-                                claimedBy: null,
-                                name: newName,
-                                topic: newTopic
-                            }
-                        );
+                    // Single source of truth: every Unclaim removes every
+                    // claimed- prefix and clears claimed-by from the topic.
+                    ticketState.unclaimTicket(
+                        channel,
+                        {
+                            reason:
+                                `Ticket unclaimed by ${interaction.user.tag}`,
+                            delay: 250
+                        }
+                    );
 
                     await interaction.reply({
                         content:
@@ -2133,17 +2098,6 @@ client.on(
                                     : []
                         },
                         'UNCLAIM'
-                    );
-
-                    scheduleTicketStateSync(
-                        channel,
-                        {
-                            name: newName,
-                            topic: newTopic,
-                            reason:
-                                `Ticket unclaimed by ${interaction.user.tag}`
-                        },
-                        1500
                     );
 
                     return;
@@ -2621,38 +2575,24 @@ client.on(
                         const ticketTypeName =
                             getTicketTypeName(channel);
 
-                        const baseName =
-                            stripClaimedPrefix(
-                                getEffectiveChannelName(channel)
-                            );
-
-                        const newName =
-                            `claimed-${baseName}`;
-
-                        const topic =
-                            String(
-                                getEffectiveChannelTopic(channel) || ''
-                            )
-                                .replace(
-                                    /\|claimed-by:\d+/g,
-                                    ''
-                                ) +
-                            `|claimed-by:${userId}`;
-
                         const isTakeover = Boolean(
                             latestClaim &&
                             latestClaim !== userId
                         );
 
-                        const version =
-                            applyOptimisticTicketState(
-                                channel,
-                                {
-                                    claimedBy: userId,
-                                    name: newName,
-                                    topic
-                                }
-                            );
+                        // Single source of truth: every Claim forces exactly
+                        // one desired state with claimed- in the name and the
+                        // claimant in the topic. Older Unclaim/Handoff state
+                        // can never overwrite this latest action.
+                        ticketState.claimTicket(
+                            channel,
+                            userId,
+                            {
+                                reason:
+                                    `Ticket claimed by ${interaction.user.tag}`,
+                                delay: 250
+                            }
+                        );
 
                         await interaction.editReply({
                             content: isTakeover
@@ -2679,21 +2619,6 @@ client.on(
                                 ]
                             },
                             'CLAIM'
-                        );
-
-                        // Debounce the visual/topic update. If staff quickly
-                        // Claim -> Unclaim -> Claim, only the final desired
-                        // state reaches Discord instead of three competing
-                        // channel rename requests.
-                        scheduleTicketStateSync(
-                            channel,
-                            {
-                                name: newName,
-                                topic,
-                                reason:
-                                    `Ticket claimed by ${interaction.user.tag}`
-                            },
-                            1500
                         );
 
                     } catch (error) {

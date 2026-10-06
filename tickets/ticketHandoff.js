@@ -11,6 +11,7 @@ const {
 } = require('discord.js');
 
 const config = require('./ticketConfig');
+const ticketState = require('./ticketState');
 
 let testingOverrides = {
     allowTicketCreatorStaffActions: false
@@ -28,16 +29,6 @@ const activeHandoffs = new Set();
 
 function getOwnerId(channel) {
     const match = String(channel?.topic || '').match(/(?:^|\|)ticket-owner:(\d+)/);
-    return match ? match[1] : null;
-}
-
-function getTicketType(channel) {
-    const match = String(channel?.topic || '').match(/(?:^|\|)ticket-type:([^|]+)/);
-    return match ? match[1] : null;
-}
-
-function getClaimedFromTopic(channel) {
-    const match = String(channel?.topic || '').match(/(?:^|\|)claimed-by:(\d+)/);
     return match ? match[1] : null;
 }
 
@@ -112,70 +103,7 @@ function getDepartmentFromParent(parentId) {
     return null;
 }
 
-function stripClaimedPrefix(name) {
-    return String(name || '').replace(/^(?:claimed-)+/i, '');
-}
-
-function formatName(value) {
-    const cleaned = String(value || '')
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9 _-]/g, '')
-        .replace(/[ _]+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 90);
-
-    return cleaned || null;
-}
-
-function buildHandoffName(channel, ownerId, requestedName) {
-    const prefix = formatName(requestedName);
-    if (!prefix) return null;
-
-    const baseName = stripClaimedPrefix(channel.name);
-    const ticketType = getTicketType(channel);
-
-    let ownerUsername = null;
-
-    if (ownerId) {
-        ownerUsername =
-            channel.guild?.members?.cache?.get(ownerId)?.user?.username ||
-            channel.client?.users?.cache?.get(ownerId)?.username ||
-            null;
-    }
-
-    const safeUsername = ownerUsername
-        ? ownerUsername
-            .toLowerCase()
-            .replace(/[^a-z0-9-]/g, '-')
-            .replace(/-+/g, '-')
-            .replace(/^-+|-+$/g, '')
-        : null;
-
-    const numberMatch = baseName.match(/-(\d{1,6})$/);
-
-    // Normal ticket format: <type>-<username>-<number>.
-    // Replace only the ticket type/name section and keep username + number.
-    if (safeUsername && numberMatch) {
-        const suffix = `${safeUsername}-${numberMatch[1]}`;
-        const maxPrefix = Math.max(1, 100 - suffix.length - 1);
-        return `${prefix.slice(0, maxPrefix)}-${suffix}`;
-    }
-
-    if (
-        ticketType &&
-        baseName.toLowerCase().startsWith(`${String(ticketType).toLowerCase()}-`)
-    ) {
-        const suffix = baseName.slice(String(ticketType).length + 1);
-        const maxPrefix = Math.max(1, 100 - suffix.length - 1);
-        return `${prefix.slice(0, maxPrefix)}-${suffix}`;
-    }
-
-    return prefix.slice(0, 100);
-}
-
-function checkPermission(interaction, helpers) {
+function checkPermission(interaction) {
     const channel = interaction.channel;
     const member = interaction.member;
     const userId = interaction.user.id;
@@ -192,9 +120,7 @@ function checkPermission(interaction, helpers) {
         };
     }
 
-    const claimedBy = helpers?.getClaimedUserId
-        ? helpers.getClaimedUserId(channel)
-        : getClaimedFromTopic(channel);
+    const claimedBy = ticketState.getClaimedUserId(channel);
 
     if (!claimedBy) {
         return {
@@ -205,6 +131,7 @@ function checkPermission(interaction, helpers) {
         };
     }
 
+    // SSS can hand off any claimed ticket, regardless of claimant or department.
     if (hasSeniorRole(member)) {
         return {
             allowed: true,
@@ -229,16 +156,7 @@ function checkPermission(interaction, helpers) {
         (department.key === 'support' && hasSupportRole(member)) ||
         (department.key === 'reports_appeals' && hasReportsRole(member));
 
-    if (!correctDepartmentRole) {
-        return {
-            allowed: false,
-            ownerId,
-            claimedBy,
-            message: '❌ You do not have permission to hand off tickets in this department.'
-        };
-    }
-
-    if (claimedBy !== userId) {
+    if (!correctDepartmentRole || claimedBy !== userId) {
         return {
             allowed: false,
             ownerId,
@@ -253,6 +171,74 @@ function checkPermission(interaction, helpers) {
         claimedBy,
         isSenior: false
     };
+}
+
+function formatName(value) {
+    const cleaned = String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9 _-]/g, '')
+        .replace(/[ _]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '');
+
+    return cleaned || null;
+}
+
+async function buildHandoffName(channel, ownerId, requestedName) {
+    const prefix = formatName(requestedName);
+    if (!prefix) return null;
+
+    const currentName = ticketState.stripClaimedPrefix(
+        ticketState.getEffectiveName(channel) || channel.name
+    );
+
+    const numberMatch = currentName.match(/-(\d{1,6})$/);
+    const ticketNumber = numberMatch ? numberMatch[1] : null;
+
+    let ownerUsername = null;
+
+    if (ownerId) {
+        ownerUsername =
+            channel.guild?.members?.cache?.get(ownerId)?.user?.username ||
+            channel.client?.users?.cache?.get(ownerId)?.username ||
+            null;
+
+        if (!ownerUsername) {
+            try {
+                const member = await channel.guild.members.fetch(ownerId);
+                ownerUsername = member?.user?.username || null;
+            } catch {}
+        }
+    }
+
+    const safeUsername = ownerUsername
+        ? ownerUsername
+            .toLowerCase()
+            .replace(/[^a-z0-9-]/g, '-')
+            .replace(/-+/g, '-')
+            .replace(/^-+|-+$/g, '')
+        : null;
+
+    if (safeUsername && ticketNumber) {
+        const suffix = `${safeUsername}-${ticketNumber}`;
+        const maxPrefixLength = Math.max(1, 100 - suffix.length - 1);
+        return `${prefix.slice(0, maxPrefixLength)}-${suffix}`;
+    }
+
+    // Fallback: preserve the final two name segments if possible.
+    const parts = currentName.split('-').filter(Boolean);
+    if (parts.length >= 3) {
+        const suffix = parts.slice(-2).join('-');
+        const maxPrefixLength = Math.max(1, 100 - suffix.length - 1);
+        return `${prefix.slice(0, maxPrefixLength)}-${suffix}`;
+    }
+
+    return prefix.slice(0, 100);
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function sendHandoffMessage(channel, ownerId, destination, notes) {
@@ -276,39 +262,52 @@ async function sendHandoffMessage(channel, ownerId, destination, notes) {
                 .join('\n');
     }
 
-    try {
-        const container = new ContainerBuilder()
-            .addTextDisplayComponents(
-                new TextDisplayBuilder().setContent(text)
-            );
-
-        return await channel.send({
-            components: [container],
-            flags: MessageFlags.IsComponentsV2,
-            allowedMentions: {
-                users: ownerId ? [ownerId] : [],
-                roles: destination.roleId ? [destination.roleId] : []
-            }
-        });
-    } catch (componentError) {
-        console.error('[HANDOFF MESSAGE COMPONENT ERROR]', componentError);
-
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
         try {
+            const container = new ContainerBuilder()
+                .addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent(text)
+                );
+
             return await channel.send({
-                content: text,
+                components: [container],
+                flags: MessageFlags.IsComponentsV2,
                 allowedMentions: {
                     users: ownerId ? [ownerId] : [],
                     roles: destination.roleId ? [destination.roleId] : []
                 }
             });
-        } catch (plainError) {
-            console.error('[HANDOFF MESSAGE FALLBACK ERROR]', plainError);
-            return null;
+        } catch (componentError) {
+            console.error(
+                `[HANDOFF MESSAGE COMPONENT ERROR ${attempt}/5]`,
+                componentError
+            );
+
+            try {
+                return await channel.send({
+                    content: text,
+                    allowedMentions: {
+                        users: ownerId ? [ownerId] : [],
+                        roles: destination.roleId ? [destination.roleId] : []
+                    }
+                });
+            } catch (plainError) {
+                console.error(
+                    `[HANDOFF MESSAGE FALLBACK ERROR ${attempt}/5]`,
+                    plainError
+                );
+            }
+        }
+
+        if (attempt < 5) {
+            await sleep(500 * attempt);
         }
     }
+
+    return null;
 }
 
-async function openHandoffModal(interaction, helpers) {
+async function openHandoffModal(interaction) {
     const channel = interaction.channel;
 
     if (!channel || !channel.isTextBased()) {
@@ -319,7 +318,7 @@ async function openHandoffModal(interaction, helpers) {
         return;
     }
 
-    const permission = checkPermission(interaction, helpers);
+    const permission = checkPermission(interaction);
 
     if (!permission.allowed) {
         await interaction.reply({
@@ -337,14 +336,6 @@ async function openHandoffModal(interaction, helpers) {
     ]
         .filter(Boolean)
         .filter(destination => destination.key !== currentDepartment?.key);
-
-    if (!destinations.length) {
-        await interaction.reply({
-            content: '❌ No other ticket departments are available.',
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
 
     const modal = new ModalBuilder()
         .setCustomId('ticket_handoff_modal')
@@ -398,7 +389,7 @@ async function openHandoffModal(interaction, helpers) {
     await interaction.showModal(modal);
 }
 
-async function submitHandoff(interaction, helpers) {
+async function submitHandoff(interaction) {
     const channel = interaction.channel;
 
     if (!channel || !channel.isTextBased()) {
@@ -413,7 +404,7 @@ async function submitHandoff(interaction, helpers) {
         flags: MessageFlags.Ephemeral
     });
 
-    const permission = checkPermission(interaction, helpers);
+    const permission = checkPermission(interaction);
 
     if (!permission.allowed) {
         await interaction.editReply({
@@ -437,7 +428,6 @@ async function submitHandoff(interaction, helpers) {
         .trim();
 
     let notes = '';
-
     try {
         notes = interaction.fields
             .getTextInputValue('handoff_notes')
@@ -461,7 +451,7 @@ async function submitHandoff(interaction, helpers) {
         return;
     }
 
-    const newName = buildHandoffName(
+    const newName = await buildHandoffName(
         channel,
         permission.ownerId,
         requestedName
@@ -477,18 +467,14 @@ async function submitHandoff(interaction, helpers) {
     activeHandoffs.add(channel.id);
 
     try {
-        // Cancel any Claim/Unclaim title edit that has not reached Discord yet.
-        // This lets the category move jump ahead instead of waiting behind old
-        // cosmetic rename work.
-        helpers?.prepareForHandoff?.(channel);
-
+        // Do not leave the interaction on Discord's "thinking" state while a
+        // channel move is queued by Discord.
         await interaction.editReply({
-            content: `✅ Hand off accepted. Moving ticket to ${destination.name}...`
+            content: `✅ Hand off accepted. Transferring to ${destination.name}...`
         });
 
-        // CATEGORY MOVE ONLY. Do not include name/topic here. Keeping the
-        // critical move separate prevents a title rename rate limit from
-        // blocking the department transfer.
+        // The category move is the only critical operation. If it fails, do
+        // not unclaim or rename the ticket.
         const movedChannel = await channel.setParent(
             destination.categoryId,
             {
@@ -497,17 +483,16 @@ async function submitHandoff(interaction, helpers) {
             }
         );
 
-        const newTopic = String(movedChannel.topic || channel.topic || '')
-            .replace(/(?:^|\|)claimed-by:\d+/g, '');
-
-        // Main script becomes unclaimed immediately and schedules ONE final
-        // name/topic sync. The requested handoff name never includes claimed-.
-        helpers?.syncAfterHandoff?.(movedChannel, {
-            name: newName,
-            topic: newTopic,
-            departmentKey: destination.key,
-            reason: `Ticket handed off by ${interaction.user.tag}`
-        });
+        // ONE shared state system now owns BOTH the automatic unclaim and the
+        // requested rename. Any older Claim/Unclaim state is superseded here.
+        ticketState.handoffTicketState(
+            movedChannel,
+            newName,
+            {
+                reason: `Ticket handed off by ${interaction.user.tag}`,
+                delay: 100
+            }
+        );
 
         await interaction.editReply({
             content: `✅ Ticket handed off to ${destination.name}.`
@@ -524,7 +509,7 @@ async function submitHandoff(interaction, helpers) {
             try {
                 await interaction.followUp({
                     content:
-                        '⚠️ The ticket moved successfully, but Discord could not send the hand off message.',
+                        '⚠️ The ticket moved successfully, but Discord could not send the hand off message after several attempts.',
                     flags: MessageFlags.Ephemeral
                 });
             } catch {}
@@ -535,8 +520,7 @@ async function submitHandoff(interaction, helpers) {
         try {
             await interaction.editReply({
                 content:
-                    '❌ Discord could not move this ticket to the selected department. ' +
-                    'The ticket has not been handed off.'
+                    '❌ Discord could not move this ticket to the selected department. The ticket was left unchanged.'
             });
         } catch {}
     } finally {
@@ -544,12 +528,12 @@ async function submitHandoff(interaction, helpers) {
     }
 }
 
-async function handleTicketHandoffInteraction(interaction, helpers = {}) {
+async function handleTicketHandoffInteraction(interaction) {
     if (
         interaction.isButton?.() &&
         interaction.customId === 'ticket_handoff'
     ) {
-        await openHandoffModal(interaction, helpers);
+        await openHandoffModal(interaction);
         return true;
     }
 
@@ -557,7 +541,7 @@ async function handleTicketHandoffInteraction(interaction, helpers = {}) {
         interaction.isModalSubmit?.() &&
         interaction.customId === 'ticket_handoff_modal'
     ) {
-        await submitHandoff(interaction, helpers);
+        await submitHandoff(interaction);
         return true;
     }
 
