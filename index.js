@@ -99,14 +99,17 @@ const client = new Client({
 
 
 const activeClaimChannels = new Set();
+const activeHandoffChannels = new Set();
 
 const CLOSE_LOG_CHANNEL_ID = '1556842177743556718';
 const optimisticClaimStates = new Map();
 const optimisticDepartmentStates = new Map();
 const optimisticChannelNames = new Map();
+const optimisticChannelTopics = new Map();
 const ticketChannelEditVersions = new Map();
 const ticketChannelEditPending = new Map();
 const ticketChannelEditWorkers = new Map();
+const ticketChannelEditRetryCounts = new Map();
 
 
 
@@ -118,50 +121,36 @@ const ticketChannelEditWorkers = new Map();
 
 
 
-function isSupportMember(member) {
-
-    if (!member?.roles?.cache) return false;
-
-
-
-    return (
-
-        member.roles.cache.has(
-
+function hasSupportStaffRole(member) {
+    return Boolean(
+        member?.roles?.cache?.has(
             config.supportStaffRoleId
-
-        ) ||
-
-        member.roles.cache.has(
-
-            config.seniorSupportStaffRoleId
-
-        ) ||
-
-        member.roles.cache.has(
-
-            config.reportsAppealsRoleId
-
         )
-
     );
-
 }
 
-
+function hasReportsAppealsRole(member) {
+    return Boolean(
+        member?.roles?.cache?.has(
+            config.reportsAppealsRoleId
+        )
+    );
+}
 
 function isSeniorSupportMember(member) {
-
-    if (!member?.roles?.cache) return false;
-
-
-
-    return member.roles.cache.has(
-
-        config.seniorSupportStaffRoleId
-
+    return Boolean(
+        member?.roles?.cache?.has(
+            config.seniorSupportStaffRoleId
+        )
     );
+}
 
+function isSupportMember(member) {
+    return (
+        hasSupportStaffRole(member) ||
+        isSeniorSupportMember(member) ||
+        hasReportsAppealsRole(member)
+    );
 }
 
 
@@ -330,12 +319,9 @@ function getTicketDepartmentFromParentId(parentId) {
 function getTicketDepartment(channel) {
     if (!channel) return null;
 
-    if (optimisticDepartmentStates.has(channel.id)) {
-        return getTicketDepartmentFromKey(
-            optimisticDepartmentStates.get(channel.id)
-        );
-    }
-
+    // Permissions must always follow the channel's real Discord category.
+    // Never use an optimistic department here, otherwise a failed/pending
+    // handoff can temporarily give the wrong department access.
     return getTicketDepartmentFromParentId(channel.parentId);
 }
 
@@ -356,6 +342,142 @@ function getEffectiveChannelName(channel) {
     }
 
     return channel.name || '';
+}
+
+function getEffectiveChannelTopic(channel) {
+    if (!channel) return '';
+
+    if (optimisticChannelTopics.has(channel.id)) {
+        return optimisticChannelTopics.get(channel.id);
+    }
+
+    return channel.topic || '';
+}
+
+function canRegularStaffUseTicketDepartment(member, channel) {
+    const department = getTicketDepartment(channel);
+
+    if (!department) return false;
+
+    if (department.key === 'support') {
+        return hasSupportStaffRole(member);
+    }
+
+    if (department.key === 'reports_appeals') {
+        return hasReportsAppealsRole(member);
+    }
+
+    // Senior Support department is SSS-only.
+    return false;
+}
+
+function getTicketActionPermission(member, channel, action, userId) {
+    const isSenior = isSeniorSupportMember(member);
+    const claimedBy = getClaimedUserId(channel);
+    const department = getTicketDepartment(channel);
+
+    if (action === 'claim') {
+        // SSS can claim/take over tickets in any department.
+        if (!isSenior) {
+            if (!department || !canRegularStaffUseTicketDepartment(member, channel)) {
+                return {
+                    allowed: false,
+                    claimedBy,
+                    message: '❌ You do not have permission to claim tickets in this department.'
+                };
+            }
+
+            if (claimedBy === userId) {
+                return {
+                    allowed: false,
+                    claimedBy,
+                    message: '❌ You have already claimed this ticket.'
+                };
+            }
+
+            if (claimedBy) {
+                return {
+                    allowed: false,
+                    claimedBy,
+                    message: `❌ This ticket has already been claimed by <@${claimedBy}>.`
+                };
+            }
+
+            return { allowed: true, claimedBy, isSenior: false };
+        }
+
+        if (claimedBy === userId) {
+            return {
+                allowed: false,
+                claimedBy,
+                message: '❌ You have already claimed this ticket.'
+            };
+        }
+
+        return { allowed: true, claimedBy, isSenior: true };
+    }
+
+    if (action === 'close' || action === 'handoff') {
+        // SSS can control any claimed ticket, regardless of who claimed it.
+        if (isSenior) {
+            if (!claimedBy) {
+                return {
+                    allowed: false,
+                    claimedBy,
+                    message: '❌ This ticket must be claimed first.'
+                };
+            }
+
+            return { allowed: true, claimedBy, isSenior: true };
+        }
+
+        // SS and R/A can only act inside their own department.
+        if (!department || !canRegularStaffUseTicketDepartment(member, channel)) {
+            return {
+                allowed: false,
+                claimedBy,
+                message: `❌ You do not have permission to ${action === 'close' ? 'close' : 'hand off'} tickets in this department.`
+            };
+        }
+
+        // For regular staff, unclaimed or claimed by somebody else is the same:
+        // they must personally claim the ticket first.
+        if (!claimedBy || claimedBy !== userId) {
+            return {
+                allowed: false,
+                claimedBy,
+                message: '❌ You must claim this ticket first.'
+            };
+        }
+
+        return { allowed: true, claimedBy, isSenior: false };
+    }
+
+    if (action === 'unclaim') {
+        if (!isSenior) {
+            return {
+                allowed: false,
+                claimedBy,
+                message: '❌ Only Senior Support Staff can unclaim a ticket.'
+            };
+        }
+
+        if (!claimedBy) {
+            return {
+                allowed: false,
+                claimedBy,
+                message: '❌ No one has claimed this ticket.'
+            };
+        }
+
+        return { allowed: true, claimedBy, isSenior: true };
+    }
+
+    return {
+        allowed: false,
+        claimedBy,
+        message: '❌ You do not have permission to use this ticket action.'
+    };
 }
 
 
@@ -452,6 +574,13 @@ function applyOptimisticTicketState(channel, updates = {}) {
         );
     }
 
+    if (Object.prototype.hasOwnProperty.call(updates, 'topic')) {
+        optimisticChannelTopics.set(
+            channel.id,
+            updates.topic
+        );
+    }
+
     return version;
 }
 
@@ -485,6 +614,11 @@ function clearPersistedOptimisticState(channel, updatedChannel, version) {
         channel.id,
         updatedChannel.name || channel.name || ''
     );
+
+    optimisticChannelTopics.set(
+        channel.id,
+        updatedChannel.topic || ''
+    );
 }
 
 function clearFailedOptimisticState(channel, version) {
@@ -495,6 +629,7 @@ function clearFailedOptimisticState(channel, version) {
     optimisticClaimStates.delete(channel.id);
     optimisticDepartmentStates.delete(channel.id);
     optimisticChannelNames.delete(channel.id);
+    optimisticChannelTopics.delete(channel.id);
 }
 
 function startTicketChannelEditWorker(channelId) {
@@ -508,7 +643,7 @@ function startTicketChannelEditWorker(channelId) {
         // Small debounce so actions fired almost together can collapse
         // into one Discord API request.
         await new Promise(resolve =>
-            setTimeout(resolve, 100)
+            setTimeout(resolve, 25)
         );
 
         while (true) {
@@ -527,26 +662,108 @@ function startTicketChannelEditWorker(channelId) {
 
             let updatedChannel = null;
 
-            try {
-                updatedChannel =
-                    await job.channel.edit(
-                        job.data
+            let lastError = null;
+
+            for (let attempt = 1; attempt <= 3; attempt += 1) {
+                try {
+                    updatedChannel =
+                        await job.channel.edit(
+                            job.data
+                        );
+
+                    clearPersistedOptimisticState(
+                        job.channel,
+                        updatedChannel,
+                        job.version
                     );
 
-                clearPersistedOptimisticState(
-                    job.channel,
-                    updatedChannel,
-                    job.version
-                );
-            } catch (error) {
-                clearFailedOptimisticState(
-                    job.channel,
-                    job.version
-                );
+                    lastError = null;
+                    break;
+                } catch (error) {
+                    lastError = error;
 
+                    if (attempt < 3) {
+                        await new Promise(resolve =>
+                            setTimeout(resolve, 250 * attempt)
+                        );
+                    }
+                }
+            }
+
+            if (!updatedChannel) {
                 console.error(
                     `[${job.label} CHANNEL EDIT ERROR]`,
-                    error
+                    lastError
+                );
+
+                // Keep the accepted optimistic state. Discord channel-name
+                // updates are heavily rate-limited, especially during rapid
+                // Claim -> Unclaim -> Claim testing. Forgetting the optimistic
+                // state here causes permissions and titles to fall back to
+                // stale Discord cache data.
+                if (
+                    ticketChannelEditVersions.get(
+                        channelId
+                    ) === job.version
+                ) {
+                    const retryCount =
+                        (ticketChannelEditRetryCounts.get(
+                            channelId
+                        ) || 0) + 1;
+
+                    ticketChannelEditRetryCounts.set(
+                        channelId,
+                        retryCount
+                    );
+
+                    // Retry the latest desired state a few times in the
+                    // background. Newer actions replace this state/version,
+                    // so an old retry can never overwrite a newer action.
+                    if (retryCount <= 6) {
+                        setTimeout(() => {
+                            if (
+                                ticketChannelEditVersions.get(
+                                    channelId
+                                ) !== job.version
+                            ) {
+                                return;
+                            }
+
+                            const existing =
+                                ticketChannelEditPending.get(
+                                    channelId
+                                );
+
+                            if (!existing) {
+                                ticketChannelEditPending.set(
+                                    channelId,
+                                    {
+                                        channel:
+                                            job.channel,
+                                        data: {
+                                            ...job.data
+                                        },
+                                        version:
+                                            job.version,
+                                        label:
+                                            `${job.label} RETRY`,
+                                        waiters: []
+                                    }
+                                );
+
+                                startTicketChannelEditWorker(
+                                    channelId
+                                );
+                            }
+                        }, Math.min(
+                            30000,
+                            3000 * retryCount
+                        ));
+                    }
+                }
+            } else {
+                ticketChannelEditRetryCounts.delete(
+                    channelId
                 );
             }
 
@@ -562,7 +779,7 @@ function startTicketChannelEditWorker(channelId) {
                 )
             ) {
                 await new Promise(resolve =>
-                    setTimeout(resolve, 75)
+                    setTimeout(resolve, 25)
                 );
             }
         }
@@ -632,6 +849,55 @@ function persistTicketChannelEdit(channel, data, version, label) {
     return requestPromise;
 }
 
+async function sendTicketActionMessage(
+    channel,
+    message,
+    allowedMentions = {},
+    label = 'TICKET ACTION'
+) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+            const container =
+                new ContainerBuilder()
+                    .addTextDisplayComponents(
+                        new TextDisplayBuilder()
+                            .setContent(message)
+                    );
+
+            return await channel.send({
+                components: [container],
+                flags: MessageFlags.IsComponentsV2,
+                allowedMentions
+            });
+        } catch (componentError) {
+            console.error(
+                `[${label} MESSAGE ERROR - ATTEMPT ${attempt}]`,
+                componentError
+            );
+
+            try {
+                return await channel.send({
+                    content: message,
+                    allowedMentions
+                });
+            } catch (plainError) {
+                console.error(
+                    `[${label} FALLBACK ERROR - ATTEMPT ${attempt}]`,
+                    plainError
+                );
+
+                if (attempt < 3) {
+                    await new Promise(resolve =>
+                        setTimeout(resolve, 300 * attempt)
+                    );
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
 async function fetchAllTicketMessages(channel) {
     const messages = [];
     let before = null;
@@ -676,11 +942,8 @@ async function createTicketTranscript(channel) {
         });
 
     const lines = [
-        'Melbourne State Roleplay Ticket Transcript',
-        `Ticket: #${channel.name}`,
+        `Ticket transcript: #${channel.name}`,
         `Generated: ${generatedAt}`,
-        '',
-        '----------------------------------------',
         ''
     ];
 
@@ -1376,10 +1639,6 @@ client.on(
                     }
 
                     const ownerId = getTicketOwnerId(channel);
-                    const isSenior = isSeniorSupportMember(
-                        interaction.member
-                    );
-
                     if (
                         ownerId === interaction.user.id &&
                         !isTicketOwnerStaffTestingAllowed(
@@ -1395,19 +1654,17 @@ client.on(
                         return;
                     }
 
-                    if (!isSenior) {
-                        await interaction.reply({
-                            content: '❌ Only Senior Support Staff can close tickets.',
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
+                    const closePermission =
+                        getTicketActionPermission(
+                            interaction.member,
+                            channel,
+                            'close',
+                            interaction.user.id
+                        );
 
-                    const claimedBy = getClaimedUserId(channel);
-
-                    if (!claimedBy) {
+                    if (!closePermission.allowed) {
                         await interaction.reply({
-                            content: '❌ This ticket must be claimed before it can be closed.',
+                            content: closePermission.message,
                             flags: MessageFlags.Ephemeral
                         });
                         return;
@@ -1481,10 +1738,7 @@ client.on(
                         } catch {}
                     }
 
-                    return;
-                }
-
-                // ==================================================
+                      // ==================================================
 
                 // HAND OFF MODAL
 
@@ -1508,14 +1762,6 @@ client.on(
                     const ownerId =
                         getTicketOwnerId(channel);
 
-                    const claimedBy =
-                        getClaimedUserId(channel);
-
-                    const isSenior =
-                        isSeniorSupportMember(
-                            interaction.member
-                        );
-
                     if (
                         ownerId === interaction.user.id &&
                         !isTicketOwnerStaffTestingAllowed(
@@ -1532,20 +1778,44 @@ client.on(
                         return;
                     }
 
-                    if (!isSenior) {
-                        await interaction.reply({
-                            content:
-                                '❌ Only Senior Support Staff can hand off tickets.',
+                    // Modal submits must be acknowledged immediately. All slow
+                    // Discord category/name work happens after this defer.
+                    try {
+                        await interaction.deferReply({
                             flags: MessageFlags.Ephemeral
+                        });
+                    } catch (error) {
+                        console.error(
+                            '[HANDOFF DEFER ERROR]',
+                            error
+                        );
+                        return;
+                    }
+
+                    const handoffPermission =
+                        getTicketActionPermission(
+                            interaction.member,
+                            channel,
+                            'handoff',
+                            interaction.user.id
+                        );
+
+                    if (!handoffPermission.allowed) {
+                        await interaction.editReply({
+                            content:
+                                handoffPermission.message
                         });
                         return;
                     }
 
-                    if (!claimedBy) {
-                        await interaction.reply({
+                    if (
+                        activeHandoffChannels.has(
+                            channel.id
+                        )
+                    ) {
+                        await interaction.editReply({
                             content:
-                                '❌ This ticket must be claimed before it can be handed off.',
-                            flags: MessageFlags.Ephemeral
+                                '❌ A hand off is already being processed for this ticket.'
                         });
                         return;
                     }
@@ -1575,19 +1845,17 @@ client.on(
                     } catch {}
 
                     if (!selected) {
-                        await interaction.reply({
+                        await interaction.editReply({
                             content:
-                                '❌ Please select a hand off destination.',
-                            flags: MessageFlags.Ephemeral
+                                '❌ Please select a hand off destination.'
                         });
                         return;
                     }
 
                     if (!requestedName) {
-                        await interaction.reply({
+                        await interaction.editReply({
                             content:
-                                '❌ Please enter a name for this ticket.',
-                            flags: MessageFlags.Ephemeral
+                                '❌ Please enter a name for this ticket.'
                         });
                         return;
                     }
@@ -1598,16 +1866,15 @@ client.on(
                         );
 
                     if (!destination) {
-                        await interaction.reply({
+                        await interaction.editReply({
                             content:
-                                '❌ Invalid hand off destination.',
-                            flags: MessageFlags.Ephemeral
+                                '❌ Invalid hand off destination.'
                         });
                         return;
                     }
 
+                    // Use the REAL category, never optimistic state.
                     const currentDepartment =
-                        getTicketDepartment(channel) ||
                         getTicketDepartmentFromParentId(
                             channel.parentId
                         );
@@ -1616,10 +1883,9 @@ client.on(
                         currentDepartment?.key ===
                         destination.key
                     ) {
-                        await interaction.reply({
+                        await interaction.editReply({
                             content:
-                                '❌ This ticket is already in that department. Reopen Hand Off and choose another department.',
-                            flags: MessageFlags.Ephemeral
+                                '❌ This ticket is already in that department. Reopen Hand Off and choose another department.'
                         });
                         return;
                     }
@@ -1632,74 +1898,133 @@ client.on(
                         );
 
                     if (!newName) {
-                        await interaction.reply({
+                        await interaction.editReply({
                             content:
-                                '❌ That ticket name could not be used. Please try a different name.',
-                            flags: MessageFlags.Ephemeral
+                                '❌ That ticket name could not be used. Please try a different name.'
                         });
                         return;
                     }
 
-                    const newTopic =
-                        String(channel.topic || '')
-                            .replace(
-                                /\|claimed-by:\d+/g,
-                                ''
-                            );
+                    activeHandoffChannels.add(
+                        channel.id
+                    );
 
-                    const version =
-                        applyOptimisticTicketState(
-                            channel,
-                            {
-                                claimedBy: null,
-                                departmentKey:
-                                    destination.key,
-                                name: newName
-                            }
-                        );
-
-                    await interaction.reply({
+                    await interaction.editReply({
                         content:
-                            `✅ Hand off accepted. Moving ticket to ${destination.name}.`,
-                        flags: MessageFlags.Ephemeral
+                            `⏳ Hand off accepted. Moving ticket to ${destination.name}...`
                     });
 
-                    // Move, rename and unclaim in ONE Discord channel edit.
-                    // This runs in the background so Discord rate limits do not
-                    // leave the interaction sitting on "thinking" for minutes.
-                    void persistTicketChannelEdit(
-                        channel,
-                        {
-                            parent: destination.categoryId,
-                            lockPermissions: false,
-                            name: newName,
-                            topic: newTopic,
-                            reason:
-                                `Ticket handed off by ${interaction.user.tag}`
-                        },
-                        version,
-                        'HANDOFF'
-                    )
-                        .then(async updatedChannel => {
-                            if (!updatedChannel) {
+                    // Run the Discord category move separately from the slower
+                    // rename/topic edit. A channel-name rate limit must never
+                    // block the ticket from moving departments.
+                    void (async () => {
+                        try {
+                            let movedChannel = null;
+                            let moveError = null;
+
+                            for (
+                                let attempt = 1;
+                                attempt <= 3;
+                                attempt += 1
+                            ) {
                                 try {
-                                    await interaction.followUp({
+                                    movedChannel =
+                                        await channel.setParent(
+                                            destination.categoryId,
+                                            {
+                                                lockPermissions: false,
+                                                reason:
+                                                    `Ticket handed off by ${interaction.user.tag}`
+                                            }
+                                        );
+
+                                    moveError = null;
+                                    break;
+                                } catch (error) {
+                                    moveError = error;
+
+                                    if (attempt < 3) {
+                                        await new Promise(
+                                            resolve =>
+                                                setTimeout(
+                                                    resolve,
+                                                    400 * attempt
+                                                )
+                                        );
+                                    }
+                                }
+                            }
+
+                            if (!movedChannel) {
+                                console.error(
+                                    '[HANDOFF CATEGORY MOVE ERROR]',
+                                    moveError
+                                );
+
+                                try {
+                                    await interaction.editReply({
                                         content:
-                                            '❌ Discord could not complete this hand off. The ticket was not moved; please try again.',
-                                        flags: MessageFlags.Ephemeral
+                                            '❌ Discord could not move this ticket to the new department. Nothing was unclaimed or renamed; please try again.'
                                     });
                                 } catch {}
 
                                 return;
                             }
 
+                            // Confirm the real Discord parent before changing
+                            // claim state or reporting success.
+                            let confirmedChannel =
+                                movedChannel;
+
+                            try {
+                                const fetched =
+                                    await channel.guild.channels.fetch(
+                                        channel.id
+                                    );
+
+                                if (fetched) {
+                                    confirmedChannel =
+                                        fetched;
+                                }
+                            } catch {}
+
                             if (
-                                ticketChannelEditVersions.get(
-                                    channel.id
-                                ) !== version
+                                confirmedChannel.parentId !==
+                                destination.categoryId
                             ) {
+                                try {
+                                    await interaction.editReply({
+                                        content:
+                                            '❌ Discord did not confirm the category move. The ticket has been left claimed so you can safely try again.'
+                                    });
+                                } catch {}
+
                                 return;
                             }
+
+                            // Only NOW unclaim the ticket, after the category
+                            // move has genuinely succeeded.
+                            const newTopic =
+                                String(
+                                    getEffectiveChannelTopic(
+                                        channel
+                                    ) || ''
+                                ).replace(
+                                    /\|claimed-by:\d+/g,
+                                    ''
+                                );
+
+                            const version =
+                                applyOptimisticTicketState(
+                                    confirmedChannel,
+                                    {
+                                        claimedBy: null,
+                                        departmentKey:
+                                            destination.key,
+                                        name: newName,
+                                        topic: newTopic
+                                    }
+                                );
 
                             const ownerMention =
                                 ownerId
@@ -1729,58 +2054,82 @@ client.on(
                                         .join('\n');
                             }
 
-                            const container =
-                                new ContainerBuilder()
-                                    .addTextDisplayComponents(
-                                        new TextDisplayBuilder()
-                                            .setContent(message)
-                                    );
+                            // Every successful handoff gets a channel message,
+                            // independent of the slower cosmetic rename.
+                            await sendTicketActionMessage(
+                                confirmedChannel,
+                                message,
+                                {
+                                    users:
+                                        ownerId
+                                            ? [ownerId]
+                                            : [],
+                                    roles:
+                                        destination.roleId
+                                            ? [destination.roleId]
+                                            : []
+                                },
+                                'HANDOFF'
+                            );
 
                             try {
-                                await updatedChannel.send({
-                                    components: [container],
-                                    flags:
-                                        MessageFlags.IsComponentsV2,
-                                    allowedMentions: {
-                                        users:
-                                            ownerId
-                                                ? [ownerId]
-                                                : [],
-                                        roles:
-                                            destination.roleId
-                                                ? [destination.roleId]
-                                                : []
-                                    }
+                                await interaction.editReply({
+                                    content:
+                                        `✅ Ticket handed off to ${destination.name}.`
                                 });
-                            } catch (messageError) {
-                                console.error(
-                                    '[HANDOFF MESSAGE ERROR]',
-                                    messageError
-                                );
+                            } catch {}
 
-                                try {
-                                    await updatedChannel.send({
-                                        content: message,
-                                        allowedMentions: {
-                                            users:
-                                                ownerId
-                                                    ? [ownerId]
-                                                    : [],
-                                            roles:
-                                                destination.roleId
-                                                    ? [destination.roleId]
-                                                    : []
-                                        }
-                                    });
-                                } catch (fallbackError) {
-                                    console.error(
-                                        '[HANDOFF FALLBACK MESSAGE ERROR]',
-                                        fallbackError
-                                    );
+                            // Rename + persist unclaimed topic separately.
+                            // Discord may throttle this when staff test rapid
+                            // claim/unclaim cycles, but it cannot stop the move.
+                            void persistTicketChannelEdit(
+                                confirmedChannel,
+                                {
+                                    name: newName,
+                                    topic: newTopic,
+                                    reason:
+                                        `Ticket handoff state updated by ${interaction.user.tag}`
+                                },
+                                version,
+                                'HANDOFF STATE'
+                            ).then(async updatedChannel => {
+                                if (!updatedChannel) {
+                                    try {
+                                        await interaction.followUp({
+                                            content:
+                                                '⚠️ The ticket moved and was unclaimed, but Discord is still delaying the channel title update.',
+                                            flags:
+                                                MessageFlags.Ephemeral
+                                        });
+                                    } catch {}
                                 }
-                            }
-                        });
+                            });
+
+                        } catch (error) {
+                            console.error(
+                                '[HANDOFF MODAL ERROR]',
+                                error
+                            );
+
+                            try {
+                                await interaction.editReply({
+                                    content:
+                                        '❌ Something went wrong while handing off this ticket. Please try again.'
+                                });
+                            } catch {}
+                        } finally {
+                            activeHandoffChannels.delete(
+                                channel.id
+                            );
+                        }
+                    })();
+
                     return;
+                }
+
+
+
+              return;
                 }
 
                 // ==================================================
@@ -1865,7 +2214,7 @@ client.on(
                         );
 
                     const newTopic =
-                        String(channel.topic || '')
+                        String(getEffectiveChannelTopic(channel) || '')
                             .replace(
                                 /\|claimed-by:\d+/g,
                                 ''
@@ -1876,7 +2225,8 @@ client.on(
                             channel,
                             {
                                 claimedBy: null,
-                                name: newName
+                                name: newName,
+                                topic: newTopic
                             }
                         );
 
@@ -1908,48 +2258,19 @@ client.on(
                                 .join('\n');
                     }
 
-                    const container =
-                        new ContainerBuilder()
-                            .addTextDisplayComponents(
-                                new TextDisplayBuilder()
-                                    .setContent(message)
-                            );
-
                     // Send the public unclaim notice immediately so it is not
                     // delayed by Discord's channel-edit rate limit.
-                    void channel.send({
-                        components: [container],
-                        flags:
-                            MessageFlags.IsComponentsV2,
-                        allowedMentions: {
+                    await sendTicketActionMessage(
+                        channel,
+                        message,
+                        {
                             users:
                                 ownerId
                                     ? [ownerId]
                                     : []
-                        }
-                    }).catch(async messageError => {
-                        console.error(
-                            '[UNCLAIM MESSAGE ERROR]',
-                            messageError
-                        );
-
-                        try {
-                            await channel.send({
-                                content: message,
-                                allowedMentions: {
-                                    users:
-                                        ownerId
-                                            ? [ownerId]
-                                            : []
-                                }
-                            });
-                        } catch (fallbackError) {
-                            console.error(
-                                '[UNCLAIM FALLBACK MESSAGE ERROR]',
-                                fallbackError
-                            );
-                        }
-                    });
+                        },
+                        'UNCLAIM'
+                    );
 
                     void persistTicketChannelEdit(
                         channel,
@@ -2350,17 +2671,12 @@ client.on(
 
                 // ==================================================
 
-
-
                 if (
                     interaction.customId ===
                     'ticket_claim'
                 ) {
                     const channel = interaction.channel;
                     const userId = interaction.user.id;
-                    const isSenior = isSeniorSupportMember(
-                        interaction.member
-                    );
 
                     if (!channel || !channel.isTextBased()) {
                         await interaction.reply({
@@ -2387,36 +2703,39 @@ client.on(
                         return;
                     }
 
-                    if (!isSupportMember(interaction.member)) {
-                        await interaction.reply({
-                            content: '❌ Only a member of the MSRP support team can use this.',
+                    // Acknowledge the interaction immediately. Any Discord
+                    // channel rename/topic rate limit can then happen later
+                    // without causing "This interaction failed".
+                    try {
+                        await interaction.deferReply({
                             flags: MessageFlags.Ephemeral
                         });
+                    } catch (error) {
+                        console.error(
+                            '[CLAIM DEFER ERROR]',
+                            error
+                        );
                         return;
                     }
 
-                    const claimedBy = getClaimedUserId(channel);
+                    const claimPermission =
+                        getTicketActionPermission(
+                            interaction.member,
+                            channel,
+                            'claim',
+                            userId
+                        );
 
-                    if (claimedBy === userId) {
-                        await interaction.reply({
-                            content: '❌ You have already claimed this ticket.',
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    if (claimedBy && !isSenior) {
-                        await interaction.reply({
-                            content: `❌ This ticket has already been claimed by <@${claimedBy}>.`,
-                            flags: MessageFlags.Ephemeral
+                    if (!claimPermission.allowed) {
+                        await interaction.editReply({
+                            content: claimPermission.message
                         });
                         return;
                     }
 
                     if (activeClaimChannels.has(channel.id)) {
-                        await interaction.reply({
-                            content: '❌ Another claim action is already being processed for this ticket. Please try again.',
-                            flags: MessageFlags.Ephemeral
+                        await interaction.editReply({
+                            content: '❌ Another claim action is already being processed for this ticket. Please try again.'
                         });
                         return;
                     }
@@ -2424,20 +2743,24 @@ client.on(
                     activeClaimChannels.add(channel.id);
 
                     try {
-                        const latestClaim =
-                            getClaimedUserId(channel);
+                        const latestPermission =
+                            getTicketActionPermission(
+                                interaction.member,
+                                channel,
+                                'claim',
+                                userId
+                            );
 
-                        if (
-                            latestClaim &&
-                            latestClaim !== userId &&
-                            !isSenior
-                        ) {
-                            await interaction.reply({
-                                content: `❌ This ticket has already been claimed by <@${latestClaim}>.`,
-                                flags: MessageFlags.Ephemeral
+                        if (!latestPermission.allowed) {
+                            await interaction.editReply({
+                                content:
+                                    latestPermission.message
                             });
                             return;
                         }
+
+                        const latestClaim =
+                            latestPermission.claimedBy;
 
                         const ownerMention = ownerId
                             ? `<@${ownerId}>`
@@ -2446,11 +2769,18 @@ client.on(
                         const ticketTypeName =
                             getTicketTypeName(channel);
 
+                        const baseName =
+                            stripClaimedPrefix(
+                                getEffectiveChannelName(channel)
+                            );
+
                         const newName =
-                            `claimed-${stripClaimedPrefix(getEffectiveChannelName(channel))}`;
+                            `claimed-${baseName}`;
 
                         const topic =
-                            String(channel.topic || '')
+                            String(
+                                getEffectiveChannelTopic(channel) || ''
+                            )
                                 .replace(
                                     /\|claimed-by:\d+/g,
                                     ''
@@ -2467,69 +2797,61 @@ client.on(
                                 channel,
                                 {
                                     claimedBy: userId,
-                                    name: newName
+                                    name: newName,
+                                    topic
                                 }
                             );
 
-                        await interaction.reply({
+                        await interaction.editReply({
                             content: isTakeover
                                 ? '✅ Ticket taken over successfully.'
-                                : '✅ Ticket claimed.',
-                            flags: MessageFlags.Ephemeral
+                                : '✅ Ticket claimed.'
                         });
 
-                        persistTicketChannelEdit(
-                            channel,
-                            {
-                                name: newName,
-                                topic
-                            },
-                            version,
-                            'CLAIM'
-                        );
-
+                        // Always send a visible claim message immediately.
+                        // This is deliberately independent from the slower
+                        // channel rename/topic update.
                         const claimText = isTakeover
                             ? `${ownerMention} | This ticket is now being handled by ${interaction.user}.`
                             : `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`;
 
-                        const container =
-                            new ContainerBuilder()
-                                .addTextDisplayComponents(
-                                    new TextDisplayBuilder()
-                                        .setContent(claimText)
-                                );
-
                         const mentionUsers =
                             [ownerId, userId].filter(Boolean);
 
-                        void channel.send({
-                            components: [container],
-                            flags: MessageFlags.IsComponentsV2,
-                            allowedMentions: {
+                        await sendTicketActionMessage(
+                            channel,
+                            claimText,
+                            {
                                 users: [
                                     ...new Set(mentionUsers)
                                 ]
-                            }
-                        }).catch(async messageError => {
-                            console.error(
-                                '[CLAIM MESSAGE ERROR]',
-                                messageError
-                            );
+                            },
+                            'CLAIM'
+                        );
 
-                            try {
-                                await channel.send({
-                                    content: claimText,
-                                    allowedMentions: {
-                                        users: [
-                                            ...new Set(mentionUsers)
-                                        ]
-                                    }
-                                });
-                            } catch (fallbackError) {
-                                console.error(
-                                    '[CLAIM FALLBACK MESSAGE ERROR]',
-                                    fallbackError
-                                );
+                        // Persist the desired title/topic in the background.
+                        // Discord heavily rate-limits repeated channel edits,
+                        // so this must never block the interaction/message.
+                        void persistTicketChannelEdit(
+                            channel,
+                            {
+                                name: newName,
+                                topic,
+                                reason:
+                                    `Ticket claimed by ${interaction.user.tag}`
+                            },
+                            version,
+                            'CLAIM'
+                        ).then(async updatedChannel => {
+                            if (!updatedChannel) {
+                                try {
+                                    await interaction.followUp({
+                                        content:
+                                            '⚠️ The claim was saved, but Discord is still delaying the channel title update.',
+                                        flags:
+                                            MessageFlags.Ephemeral
+                                    });
+                                } catch {}
                             }
                         });
 
@@ -2539,28 +2861,22 @@ client.on(
                             error
                         );
 
-                        if (!interaction.replied && !interaction.deferred) {
-                            try {
-                                await interaction.reply({
-                                    content: '❌ Something went wrong while claiming this ticket.',
-                                    flags: MessageFlags.Ephemeral
-                                });
-                            } catch {}
-                        } else {
-                            try {
-                                await interaction.editReply({
-                                    content: '❌ Something went wrong while claiming this ticket.'
-                                });
-                            } catch {}
-                        }
+                        try {
+                            await interaction.editReply({
+                                content:
+                                    '❌ Something went wrong while claiming this ticket.'
+                            });
+                        } catch {}
                     } finally {
-                        activeClaimChannels.delete(channel.id);
+                        activeClaimChannels.delete(
+                            channel.id
+                        );
                     }
 
                     return;
                 }
 
-                // ==================================================
+
 
                 // ==================================================
 
@@ -2621,11 +2937,6 @@ client.on(
                             channel
                         );
 
-                    const isSenior =
-                        isSeniorSupportMember(
-                            interaction.member
-                        );
-
                     if (
                         ownerId ===
                         interaction.user.id &&
@@ -2635,52 +2946,30 @@ client.on(
                             interaction.user.id
                         )
                     ) {
-
                         await interaction.reply({
                             content:
                                 '❌ The user who created the ticket cannot use staff ticket buttons.',
                             flags:
                                 MessageFlags.Ephemeral
                         });
-
                         return;
                     }
 
-                    if (
-                        !isSenior
-                    ) {
-
-                        await interaction.reply({
-                            content:
-                                '❌ Only Senior Support Staff can close tickets.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-
-                        return;
-                    }
-
-                    const claimedBy =
-                        getClaimedUserId(
-                            channel
+                    const closePermission =
+                        getTicketActionPermission(
+                            interaction.member,
+                            channel,
+                            'close',
+                            interaction.user.id
                         );
 
-                    // Close is SSS-only, and the ticket must already be claimed.
-                    if (
-                        !claimedBy
-                    ) {
-
+                    if (!closePermission.allowed) {
                         await interaction.reply({
-                            content:
-                                '❌ This ticket must be claimed before it can be closed.',
-                            flags:
-                                MessageFlags.Ephemeral
+                            content: closePermission.message,
+                            flags: MessageFlags.Ephemeral
                         });
-
                         return;
                     }
-
-
 
                     const modal =
 
@@ -2793,14 +3082,6 @@ client.on(
                     const ownerId =
                         getTicketOwnerId(channel);
 
-                    const claimedBy =
-                        getClaimedUserId(channel);
-
-                    const isSenior =
-                        isSeniorSupportMember(
-                            interaction.member
-                        );
-
                     if (
                         ownerId === interaction.user.id &&
                         !isTicketOwnerStaffTestingAllowed(
@@ -2818,26 +3099,18 @@ client.on(
                         return;
                     }
 
-                    if (
-                        !isSenior
-                    ) {
-                        await interaction.reply({
-                            content:
-                                '❌ Only Senior Support Staff can hand off tickets.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
+                    const handoffPermission =
+                        getTicketActionPermission(
+                            interaction.member,
+                            channel,
+                            'handoff',
+                            interaction.user.id
+                        );
 
-                    if (
-                        !claimedBy
-                    ) {
+                    if (!handoffPermission.allowed) {
                         await interaction.reply({
-                            content:
-                                '❌ This ticket must be claimed before it can be handed off.',
-                            flags:
-                                MessageFlags.Ephemeral
+                            content: handoffPermission.message,
+                            flags: MessageFlags.Ephemeral
                         });
                         return;
                     }
