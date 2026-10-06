@@ -110,6 +110,8 @@ const ticketChannelEditVersions = new Map();
 const ticketChannelEditPending = new Map();
 const ticketChannelEditWorkers = new Map();
 const ticketChannelEditRetryCounts = new Map();
+const ticketStateSyncTimers = new Map();
+const ticketStateSyncDesired = new Map();
 
 
 
@@ -584,6 +586,112 @@ function applyOptimisticTicketState(channel, updates = {}) {
     return version;
 }
 
+
+function cancelScheduledTicketStateSync(channelId) {
+    const timer = ticketStateSyncTimers.get(channelId);
+
+    if (timer) {
+        clearTimeout(timer);
+        ticketStateSyncTimers.delete(channelId);
+    }
+
+    ticketStateSyncDesired.delete(channelId);
+}
+
+function scheduleTicketStateSync(
+    channel,
+    {
+        name,
+        topic,
+        reason = 'Ticket state updated'
+    },
+    delay = 1500
+) {
+    if (!channel) return;
+
+    const channelId = channel.id;
+
+    cancelScheduledTicketStateSync(channelId);
+
+    const desired = {
+        name: String(name || channel.name || '').slice(0, 100),
+        topic: String(topic ?? channel.topic ?? ''),
+        reason
+    };
+
+    ticketStateSyncDesired.set(channelId, desired);
+
+    const timer = setTimeout(async () => {
+        ticketStateSyncTimers.delete(channelId);
+
+        if (ticketStateSyncDesired.get(channelId) !== desired) {
+            return;
+        }
+
+        try {
+            if (
+                String(channel.name || '').toLowerCase() ===
+                    desired.name.toLowerCase() &&
+                String(channel.topic || '') === desired.topic
+            ) {
+                optimisticChannelNames.set(channelId, desired.name);
+                optimisticChannelTopics.set(channelId, desired.topic);
+                optimisticClaimStates.set(
+                    channelId,
+                    getClaimedUserIdFromTopic(desired.topic)
+                );
+                ticketStateSyncDesired.delete(channelId);
+                return;
+            }
+
+            const updatedChannel = await channel.edit({
+                name: desired.name,
+                topic: desired.topic,
+                reason: desired.reason
+            });
+
+            if (ticketStateSyncDesired.get(channelId) !== desired) {
+                return;
+            }
+
+            optimisticChannelNames.set(
+                channelId,
+                updatedChannel.name || desired.name
+            );
+            optimisticChannelTopics.set(
+                channelId,
+                updatedChannel.topic ?? desired.topic
+            );
+            optimisticClaimStates.set(
+                channelId,
+                getClaimedUserIdFromTopic(
+                    updatedChannel.topic ?? desired.topic
+                )
+            );
+
+            ticketStateSyncDesired.delete(channelId);
+        } catch (error) {
+            console.error('[TICKET STATE SYNC ERROR]', error);
+            ticketStateSyncDesired.delete(channelId);
+        }
+    }, delay);
+
+    ticketStateSyncTimers.set(channelId, timer);
+}
+
+function prepareTicketForHandoff(channel) {
+    if (!channel) return;
+
+    cancelScheduledTicketStateSync(channel.id);
+
+    const nextVersion =
+        (ticketChannelEditVersions.get(channel.id) || 0) + 1;
+
+    ticketChannelEditVersions.set(channel.id, nextVersion);
+    ticketChannelEditPending.delete(channel.id);
+    ticketChannelEditRetryCounts.delete(channel.id);
+}
+
 function clearPersistedOptimisticState(channel, updatedChannel, version) {
     if (ticketChannelEditVersions.get(channel.id) !== version) {
         return;
@@ -905,14 +1013,8 @@ function syncTicketStateAfterHandoff(channel, updates = {}) {
     if (!channel) return;
 
     const channelId = channel.id;
-    const nextVersion =
-        (ticketChannelEditVersions.get(channelId) || 0) + 1;
 
-    // Invalidate any older queued Claim/Unclaim edit so it cannot become the
-    // main script's source of truth after the handoff.
-    ticketChannelEditVersions.set(channelId, nextVersion);
-    ticketChannelEditPending.delete(channelId);
-    ticketChannelEditRetryCounts.delete(channelId);
+    prepareTicketForHandoff(channel);
 
     optimisticClaimStates.set(channelId, null);
 
@@ -934,6 +1036,18 @@ function syncTicketStateAfterHandoff(channel, updates = {}) {
         optimisticChannelTopics.set(
             channelId,
             updates.topic || ''
+        );
+    }
+
+    if (updates.name && Object.prototype.hasOwnProperty.call(updates, 'topic')) {
+        scheduleTicketStateSync(
+            channel,
+            {
+                name: updates.name,
+                topic: updates.topic || '',
+                reason: updates.reason || 'Ticket handed off'
+            },
+            350
         );
     }
 }
@@ -1389,6 +1503,8 @@ client.on(
                     interaction,
                     {
                         getClaimedUserId,
+                        prepareForHandoff:
+                            prepareTicketForHandoff,
                         syncAfterHandoff:
                             syncTicketStateAfterHandoff
                     }
@@ -2019,7 +2135,7 @@ client.on(
                         'UNCLAIM'
                     );
 
-                    void persistTicketChannelEdit(
+                    scheduleTicketStateSync(
                         channel,
                         {
                             name: newName,
@@ -2027,19 +2143,8 @@ client.on(
                             reason:
                                 `Ticket unclaimed by ${interaction.user.tag}`
                         },
-                        version,
-                        'UNCLAIM'
-                    ).then(async updatedChannel => {
-                        if (!updatedChannel) {
-                            try {
-                                await interaction.followUp({
-                                    content:
-                                        '❌ Discord could not finish updating the ticket channel after unclaiming it. Please try again.',
-                                    flags: MessageFlags.Ephemeral
-                                });
-                            } catch {}
-                        }
-                    });
+                        1500
+                    );
 
                     return;
                 }
@@ -2549,10 +2654,6 @@ client.on(
                                 }
                             );
 
-                        scheduleClaimTitleReconciliation(
-                            channel
-                        );
-
                         await interaction.editReply({
                             content: isTakeover
                                 ? '✅ Ticket taken over successfully.'
@@ -2580,10 +2681,11 @@ client.on(
                             'CLAIM'
                         );
 
-                        // Persist the desired title/topic in the background.
-                        // Discord heavily rate-limits repeated channel edits,
-                        // so this must never block the interaction/message.
-                        void persistTicketChannelEdit(
+                        // Debounce the visual/topic update. If staff quickly
+                        // Claim -> Unclaim -> Claim, only the final desired
+                        // state reaches Discord instead of three competing
+                        // channel rename requests.
+                        scheduleTicketStateSync(
                             channel,
                             {
                                 name: newName,
@@ -2591,20 +2693,8 @@ client.on(
                                 reason:
                                     `Ticket claimed by ${interaction.user.tag}`
                             },
-                            version,
-                            'CLAIM'
-                        ).then(async updatedChannel => {
-                            if (!updatedChannel) {
-                                try {
-                                    await interaction.followUp({
-                                        content:
-                                            '⚠️ The claim was saved, but Discord is still delaying the channel title update.',
-                                        flags:
-                                            MessageFlags.Ephemeral
-                                    });
-                                } catch {}
-                            }
-                        });
+                            1500
+                        );
 
                     } catch (error) {
                         console.error(

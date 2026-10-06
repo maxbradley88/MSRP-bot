@@ -155,6 +155,8 @@ function buildHandoffName(channel, ownerId, requestedName) {
 
     const numberMatch = baseName.match(/-(\d{1,6})$/);
 
+    // Normal ticket format: <type>-<username>-<number>.
+    // Replace only the ticket type/name section and keep username + number.
     if (safeUsername && numberMatch) {
         const suffix = `${safeUsername}-${numberMatch[1]}`;
         const maxPrefix = Math.max(1, 100 - suffix.length - 1);
@@ -274,116 +276,36 @@ async function sendHandoffMessage(channel, ownerId, destination, notes) {
                 .join('\n');
     }
 
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-        try {
-            const container = new ContainerBuilder()
-                .addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(text)
-                );
+    try {
+        const container = new ContainerBuilder()
+            .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(text)
+            );
 
+        return await channel.send({
+            components: [container],
+            flags: MessageFlags.IsComponentsV2,
+            allowedMentions: {
+                users: ownerId ? [ownerId] : [],
+                roles: destination.roleId ? [destination.roleId] : []
+            }
+        });
+    } catch (componentError) {
+        console.error('[HANDOFF MESSAGE COMPONENT ERROR]', componentError);
+
+        try {
             return await channel.send({
-                components: [container],
-                flags: MessageFlags.IsComponentsV2,
+                content: text,
                 allowedMentions: {
                     users: ownerId ? [ownerId] : [],
                     roles: destination.roleId ? [destination.roleId] : []
                 }
             });
-        } catch (componentError) {
-            console.error(
-                `[HANDOFF MESSAGE COMPONENT ERROR - ATTEMPT ${attempt}]`,
-                componentError
-            );
-
-            try {
-                return await channel.send({
-                    content: text,
-                    allowedMentions: {
-                        users: ownerId ? [ownerId] : [],
-                        roles: destination.roleId ? [destination.roleId] : []
-                    }
-                });
-            } catch (plainError) {
-                console.error(
-                    `[HANDOFF MESSAGE FALLBACK ERROR - ATTEMPT ${attempt}]`,
-                    plainError
-                );
-
-                if (attempt < 3) {
-                    await new Promise(resolve =>
-                        setTimeout(resolve, 400 * attempt)
-                    );
-                }
-            }
+        } catch (plainError) {
+            console.error('[HANDOFF MESSAGE FALLBACK ERROR]', plainError);
+            return null;
         }
     }
-
-    return null;
-}
-
-async function persistTopic(channel, newTopic, userTag) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-        try {
-            await channel.setTopic(
-                newTopic,
-                `Ticket handoff claim cleared by ${userTag}`
-            );
-            return true;
-        } catch (error) {
-            console.error(
-                `[HANDOFF TOPIC ERROR - ATTEMPT ${attempt}]`,
-                error
-            );
-
-            if (attempt < 3) {
-                await new Promise(resolve =>
-                    setTimeout(resolve, 750 * attempt)
-                );
-            }
-        }
-    }
-
-    return false;
-}
-
-async function persistName(channel, newName, userTag) {
-    const delays = [0, 5000, 20000, 60000];
-
-    for (let attempt = 0; attempt < delays.length; attempt += 1) {
-        if (delays[attempt] > 0) {
-            await new Promise(resolve =>
-                setTimeout(resolve, delays[attempt])
-            );
-        }
-
-        try {
-            const latest = await channel.fetch().catch(() => channel);
-
-            if (latest.name === newName) {
-                return true;
-            }
-
-            await latest.setName(
-                newName,
-                `Ticket renamed during handoff by ${userTag}`
-            );
-            return true;
-        } catch (error) {
-            console.error(
-                `[HANDOFF NAME ERROR - ATTEMPT ${attempt + 1}]`,
-                error
-            );
-        }
-    }
-
-    return false;
-}
-
-function persistFinalState(channel, newName, newTopic, userTag) {
-    // Keep these separate. Discord can heavily delay channel-name changes;
-    // that should never prevent the claimed-by topic from being cleared.
-    void persistTopic(channel, newTopic, userTag);
-    void persistName(channel, newName, userTag);
 }
 
 async function openHandoffModal(interaction, helpers) {
@@ -487,8 +409,6 @@ async function submitHandoff(interaction, helpers) {
         return;
     }
 
-    // Acknowledge immediately so category movement can never cause
-    // "This interaction failed".
     await interaction.deferReply({
         flags: MessageFlags.Ephemeral
     });
@@ -517,6 +437,7 @@ async function submitHandoff(interaction, helpers) {
         .trim();
 
     let notes = '';
+
     try {
         notes = interaction.fields
             .getTextInputValue('handoff_notes')
@@ -556,12 +477,18 @@ async function submitHandoff(interaction, helpers) {
     activeHandoffs.add(channel.id);
 
     try {
+        // Cancel any Claim/Unclaim title edit that has not reached Discord yet.
+        // This lets the category move jump ahead instead of waiting behind old
+        // cosmetic rename work.
+        helpers?.prepareForHandoff?.(channel);
+
         await interaction.editReply({
-            content: `⏳ Moving ticket to ${destination.name}...`
+            content: `✅ Hand off accepted. Moving ticket to ${destination.name}...`
         });
 
-        // Moving the category is the critical handoff operation. Nothing is
-        // unclaimed until this succeeds.
+        // CATEGORY MOVE ONLY. Do not include name/topic here. Keeping the
+        // critical move separate prevents a title rename rate limit from
+        // blocking the department transfer.
         const movedChannel = await channel.setParent(
             destination.categoryId,
             {
@@ -573,15 +500,19 @@ async function submitHandoff(interaction, helpers) {
         const newTopic = String(movedChannel.topic || channel.topic || '')
             .replace(/(?:^|\|)claimed-by:\d+/g, '');
 
-        // Tell the main script immediately that the ticket is now unclaimed.
-        // This prevents its fast claim cache from keeping the old claimant.
+        // Main script becomes unclaimed immediately and schedules ONE final
+        // name/topic sync. The requested handoff name never includes claimed-.
         helpers?.syncAfterHandoff?.(movedChannel, {
             name: newName,
             topic: newTopic,
-            departmentKey: destination.key
+            departmentKey: destination.key,
+            reason: `Ticket handed off by ${interaction.user.tag}`
         });
 
-        // The handoff message is independent from the slower rename/topic edit.
+        await interaction.editReply({
+            content: `✅ Ticket handed off to ${destination.name}.`
+        });
+
         const notification = await sendHandoffMessage(
             movedChannel,
             permission.ownerId,
@@ -590,21 +521,14 @@ async function submitHandoff(interaction, helpers) {
         );
 
         if (!notification) {
-            console.error('[HANDOFF MESSAGE FAILED AFTER ALL RETRIES]');
+            try {
+                await interaction.followUp({
+                    content:
+                        '⚠️ The ticket moved successfully, but Discord could not send the hand off message.',
+                    flags: MessageFlags.Ephemeral
+                });
+            } catch {}
         }
-
-        await interaction.editReply({
-            content: `✅ Ticket handed off to ${destination.name}.`
-        });
-
-        // Do not block the successful handoff on Discord's channel-name rate
-        // limit. The final name/topic is persisted separately and retried once.
-        void persistFinalState(
-            movedChannel,
-            newName,
-            newTopic,
-            interaction.user.tag
-        );
     } catch (error) {
         console.error('[HANDOFF MOVE ERROR]', error);
 
