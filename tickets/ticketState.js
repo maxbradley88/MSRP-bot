@@ -230,12 +230,13 @@ async function runSyncWorker(channel) {
 function claimTicket(channel, userId, options = {}) {
     const current = getDesiredState(channel);
 
-    const baseName = stripClaimedPrefix(
-        current.name || channel.name
-    );
+    const cleanName =
+        stripClaimedPrefix(
+            current.name || channel.name
+        );
 
     const claimedName =
-        `claimed-${baseName}`.slice(0, 100);
+        `claimed-${cleanName}`.slice(0, 100);
 
     const claimedTopic =
         setClaimedBy(
@@ -243,35 +244,131 @@ function claimTicket(channel, userId, options = {}) {
             userId
         );
 
-    const nextState = updateDesiredState(
-        channel,
-        {
-            claimedBy: userId,
-            name: claimedName,
-            topic: claimedTopic
-        },
-        {
-            reason:
-                options.reason ||
-                `Ticket claimed by ${userId}`,
-            delay: 0
-        }
-    );
-
-    // Force the visual channel name immediately as well.
-    // This makes every Claim re-add "claimed-" even after Unclaim.
-    void channel.edit({
-        name: claimedName,
-        topic: claimedTopic,
-        reason:
-            options.reason ||
-            `Ticket claimed by ${userId}`
-    }).catch(error => {
-        console.error(
-            '[CLAIM CHANNEL UPDATE ERROR]',
-            error
+    const nextState =
+        updateDesiredState(
+            channel,
+            {
+                claimedBy: userId,
+                name: claimedName,
+                topic: claimedTopic
+            },
+            {
+                reason:
+                    options.reason ||
+                    `Ticket claimed by ${userId}`,
+                delay: 0
+            }
         );
-    });
+
+    /*
+     * FORCE the real Discord channel name as well.
+     *
+     * This runs separately from the normal state worker,
+     * so Claim -> Unclaim -> Claim will always try to put
+     * "claimed-" back onto the actual channel.
+     */
+    setTimeout(async () => {
+        try {
+            /*
+             * If another action happened after this Claim
+             * (for example Unclaim), cancel this old rename.
+             */
+            const latestBeforeFetch =
+                desiredStates.get(channel.id);
+
+            if (
+                !latestBeforeFetch ||
+                latestBeforeFetch.version !==
+                    nextState.version ||
+                latestBeforeFetch.claimedBy !==
+                    userId
+            ) {
+                return;
+            }
+
+            const freshChannel =
+                await channel.guild.channels.fetch(
+                    channel.id,
+                    {
+                        force: true
+                    }
+                );
+
+            if (!freshChannel) {
+                return;
+            }
+
+            /*
+             * Check again after fetching because another
+             * action may have happened while Discord was
+             * responding.
+             */
+            const latest =
+                desiredStates.get(channel.id);
+
+            if (
+                !latest ||
+                latest.version !==
+                    nextState.version ||
+                latest.claimedBy !==
+                    userId
+            ) {
+                return;
+            }
+
+            const freshBaseName =
+                stripClaimedPrefix(
+                    freshChannel.name
+                );
+
+            const forcedName =
+                `claimed-${freshBaseName}`
+                    .slice(0, 100);
+
+            const forcedTopic =
+                setClaimedBy(
+                    freshChannel.topic,
+                    userId
+                );
+
+            if (
+                freshChannel.name.toLowerCase() !==
+                    forcedName.toLowerCase() ||
+                String(freshChannel.topic || '') !==
+                    forcedTopic
+            ) {
+                const updatedChannel =
+                    await freshChannel.edit({
+                        name: forcedName,
+                        topic: forcedTopic,
+                        reason:
+                            options.reason ||
+                            `Ticket claimed by ${userId}`
+                    });
+
+                console.log(
+                    `[CLAIM TITLE FORCED] ${updatedChannel.name}`
+                );
+            }
+
+        } catch (error) {
+            /*
+             * Deleted ticket — don't retry it.
+             */
+            if (
+                error?.code === 10003 ||
+                error?.rawError?.code === 10003
+            ) {
+                forgetTicket(channel.id);
+                return;
+            }
+
+            console.error(
+                '[CLAIM TITLE FORCE ERROR]',
+                error
+            );
+        }
+    }, 250);
 
     return nextState;
 }
