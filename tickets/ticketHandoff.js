@@ -446,13 +446,10 @@ async function submitHandoff(interaction) {
 
         // The category move is the only critical operation. If it fails, do
         // not unclaim or rename the ticket.
-        const movedChannel = await channel.setParent(
-            destination.categoryId,
-            {
-                lockPermissions: false,
-                reason: `Ticket handed off by ${interaction.user.tag}`
-            }
-        );
+const movedChannel = await channel.edit({
+    parent: destination.categoryId,
+    reason: `Ticket handed off by ${interaction.user.tag}`
+});
 
         // ONE shared state system now owns BOTH the automatic unclaim and the
         // requested rename. Any older Claim/Unclaim state is superseded here.
