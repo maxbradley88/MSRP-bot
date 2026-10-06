@@ -2584,15 +2584,52 @@ client.on(
                         // one desired state with claimed- in the name and the
                         // claimant in the topic. Older Unclaim/Handoff state
                         // can never overwrite this latest action.
-                        ticketState.claimTicket(
-                            channel,
-                            userId,
-                            {
-                                reason:
-                                    `Ticket claimed by ${interaction.user.tag}`,
-                                delay: 250
-                            }
-                        );
+const freshChannel =
+    await interaction.guild.channels.fetch(
+        channel.id,
+        { force: true }
+    );
+
+if (!freshChannel) {
+    throw new Error(
+        'Ticket channel could not be found.'
+    );
+}
+
+const cleanName =
+    freshChannel.name
+        .replace(/^(?:claimed-)+/i, '');
+
+const claimedName =
+    `claimed-${cleanName}`.slice(0, 100);
+
+const cleanTopic =
+    String(freshChannel.topic || '')
+        .replace(
+            /(?:^|\|)claimed-by:\d+/g,
+            ''
+        )
+        .replace(/^\|+|\|+$/g, '')
+        .replace(/\|{2,}/g, '|');
+
+const claimedTopic =
+    `${cleanTopic}${cleanTopic ? '|' : ''}` +
+    `claimed-by:${userId}`;
+
+// Remove any old remembered state first.
+ticketState.forgetTicket(channel.id);
+
+// Force Discord itself to save the claimed state.
+await freshChannel.edit({
+    name: claimedName,
+    topic: claimedTopic,
+    reason:
+        `Ticket claimed by ${interaction.user.tag}`
+});
+
+// Clear cache again so future actions read the
+// state Discord has actually saved.
+ticketState.forgetTicket(channel.id);
 
                         await interaction.editReply({
                             content: isTakeover
