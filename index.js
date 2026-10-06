@@ -2482,17 +2482,14 @@ if (
     const channel = interaction.channel;
     const userId = interaction.user.id;
 
-    // Acknowledge immediately so Discord never sits
-    // on "Melbourne State Roleplay is thinking..."
-await interaction.deferReply({
-    flags: MessageFlags.Ephemeral
-});
+    await interaction.deferReply({
+        flags: MessageFlags.Ephemeral
+    });
 
-// Immediately replace Discord's "thinking..." message.
-// The channel rename can continue after this.
-await interaction.editReply({
-    content: '⏳ Claiming ticket...'
-});
+    await interaction.editReply({
+        content: '⏳ Claiming ticket...'
+    });
+
     if (
         !channel ||
         !channel.isTextBased()
@@ -2505,52 +2502,8 @@ await interaction.editReply({
         return;
     }
 
-    /*
-     * Always fetch the latest version of the channel.
-     *
-     * This prevents an old cached channel name/topic
-     * from being used after Claim -> Unclaim -> Claim.
-     */
-    let freshChannel;
-
-    try {
-        freshChannel =
-            await interaction.guild.channels.fetch(
-                channel.id,
-                {
-                    force: true
-                }
-            );
-    } catch (error) {
-        console.error(
-            '[CLAIM FETCH ERROR]',
-            error
-        );
-
-        await interaction.editReply({
-            content:
-                '❌ This ticket channel could not be found.'
-        });
-
-        return;
-    }
-
-    if (
-        !freshChannel ||
-        !freshChannel.isTextBased()
-    ) {
-        await interaction.editReply({
-            content:
-                '❌ This ticket channel could not be found.'
-        });
-
-        return;
-    }
-
     const ownerId =
-        getTicketOwnerId(
-            freshChannel
-        );
+        getTicketOwnerId(channel);
 
     if (
         ownerId === userId &&
@@ -2571,14 +2524,12 @@ await interaction.editReply({
     const claimPermission =
         getTicketActionPermission(
             interaction.member,
-            freshChannel,
+            channel,
             'claim',
             userId
         );
 
-    if (
-        !claimPermission.allowed
-    ) {
+    if (!claimPermission.allowed) {
         await interaction.editReply({
             content:
                 claimPermission.message
@@ -2589,7 +2540,7 @@ await interaction.editReply({
 
     if (
         activeClaimChannels.has(
-            freshChannel.id
+            channel.id
         )
     ) {
         await interaction.editReply({
@@ -2601,25 +2552,19 @@ await interaction.editReply({
     }
 
     activeClaimChannels.add(
-        freshChannel.id
+        channel.id
     );
 
     try {
-        /*
-         * Check permissions again now that the
-         * claim lock has been acquired.
-         */
         const latestPermission =
             getTicketActionPermission(
                 interaction.member,
-                freshChannel,
+                channel,
                 'claim',
                 userId
             );
 
-        if (
-            !latestPermission.allowed
-        ) {
+        if (!latestPermission.allowed) {
             await interaction.editReply({
                 content:
                     latestPermission.message
@@ -2643,189 +2588,48 @@ await interaction.editReply({
                 : 'Customer';
 
         const ticketTypeName =
-            getTicketTypeName(
-                freshChannel
-            );
+            getTicketTypeName(channel);
 
         /*
-         * IMPORTANT:
+         * SINGLE SOURCE OF TRUTH:
          *
-         * Remove ALL existing claimed- prefixes first.
+         * This immediately records the ticket as claimed in
+         * ticketState and schedules exactly one Discord name/topic
+         * update. Every Claim therefore targets:
          *
-         * Then ALWAYS add exactly ONE claimed- prefix.
+         * claimed-<current-ticket-name>
          *
-         * Examples:
-         *
-         * general-max-001
-         * -> claimed-general-max-001
-         *
-         * claimed-general-max-001
-         * -> claimed-general-max-001
-         *
-         * claimed-claimed-general-max-001
-         * -> claimed-general-max-001
+         * and adds claimed-by:<userId> to the topic.
          */
-        const cleanName =
-            String(
-                freshChannel.name || ''
-            )
-                .replace(
-                    /^(?:claimed-)+/i,
-                    ''
-                );
-
-        const claimedName =
-            `claimed-${cleanName}`
-                .slice(0, 100);
-
-        /*
-         * Remove any old claimed-by value.
-         */
-        const cleanTopic =
-            String(
-                freshChannel.topic || ''
-            )
-                .split('|')
-                .filter(
-                    section =>
-                        !section.startsWith(
-                            'claimed-by:'
-                        )
-                )
-                .filter(Boolean)
-                .join('|');
-
-        /*
-         * Add the NEW claimant.
-         */
-        const claimedTopic =
-    [
-        cleanTopic,
-        `claimed-by:${userId}`
-    ]
-        .filter(Boolean)
-        .join('|');
-
-/*
- * Remove any old remembered ticket state.
- */
-if (
-    ticketState &&
-    typeof ticketState.forgetTicket ===
-        'function'
-) {
-ticketState.forgetTicket(
-    freshChannel.id
-);
-
-/*
- * Immediately update the channel object in memory.
- * This means permission checks know the ticket is
- * claimed BEFORE Discord finishes the rename.
- */
-freshChannel.name = claimedName;
-freshChannel.topic = claimedTopic;
-
-channel.name = claimedName;
-channel.topic = claimedTopic;
-
-/*
- * Tell the staff member immediately.
- */
-await interaction.editReply({
-    content:
-        isTakeover
-            ? '✅ Ticket taken over successfully.'
-            : '✅ Ticket claimed.'
-});
-
-/*
- * Update the real Discord channel separately.
- * Do not make the Claim interaction wait for it.
- */
-void (async () => {
-    try {
-        const updatedChannel =
-            await freshChannel.edit({
-                name: claimedName,
-                topic: claimedTopic,
+        ticketState.claimTicket(
+            channel,
+            userId,
+            {
                 reason:
-                    `Ticket claimed by ${interaction.user.tag}`
-            });
-
-        console.log(
-            `[CLAIM RENAME SUCCESS] ${updatedChannel.name}`
+                    `Ticket claimed by ${interaction.user.tag}`,
+                delay: 0
+            }
         );
 
-        ticketState.forgetTicket(
-            updatedChannel.id
-        );
-    } catch (error) {
-        console.error(
-            '[CLAIM RENAME ERROR]',
-            error
-        );
-    }
-})();
-
-/*
- * ALWAYS send the visible Claim message.
- */
-const claimText =
-    isTakeover
-        ? `${ownerMention} | This ticket is now being handled by ${interaction.user}.`
-        : `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`;
-
-const mentionUsers =
-    [
-        ownerId,
-        userId
-    ].filter(Boolean);
-
-try {
-    await sendTicketActionMessage(
-        freshChannel,
-        claimText,
-        {
-            users: [
-                ...new Set(
-                    mentionUsers
-                )
-            ]
-        },
-        'CLAIM'
-    );
-} catch (error) {
-    console.error(
-        '[CLAIM MESSAGE ERROR]',
-        error
-    );
-
-    try {
-        await freshChannel.send({
-            content: claimText
+        await interaction.editReply({
+            content:
+                isTakeover
+                    ? '✅ Ticket taken over successfully.'
+                    : '✅ Ticket claimed.'
         });
-    } catch (fallbackError) {
-        console.error(
-            '[CLAIM FALLBACK MESSAGE ERROR]',
-            fallbackError
-        );
-    }
-}
+
         const claimText =
             isTakeover
                 ? `${ownerMention} | This ticket is now being handled by ${interaction.user}.`
                 : `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`;
 
         const mentionUsers =
-            [
-                ownerId,
-                userId
-            ].filter(Boolean);
+            [ownerId, userId]
+                .filter(Boolean);
 
         try {
             await sendTicketActionMessage(
-                updatedChannel,
+                channel,
                 claimText,
                 {
                     users: [
@@ -2836,24 +2640,17 @@ try {
                 },
                 'CLAIM'
             );
-        } catch (error) {
-            /*
-             * A failed notification must NEVER
-             * undo a successful Claim.
-             */
+        } catch (messageError) {
             console.error(
                 '[CLAIM MESSAGE ERROR]',
-                error
+                messageError
             );
 
             try {
-                await updatedChannel.send({
-                    content:
-                        claimText
+                await channel.send({
+                    content: claimText
                 });
-            } catch (
-                fallbackError
-            ) {
+            } catch (fallbackError) {
                 console.error(
                     '[CLAIM FALLBACK MESSAGE ERROR]',
                     fallbackError
@@ -2882,7 +2679,6 @@ try {
 
     return;
 }
-
 
 
                 // ==================================================
