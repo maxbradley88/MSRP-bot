@@ -156,7 +156,7 @@ function isRulesQuestion(question) {
 function getRulesDeclineMessage() {
 
     return (
-        '# You Must Agree o The Rules Before Creating a Ticket\n\n' +
+        '# You Must Agree To The Rules Before Creating A Ticket\n\n' +
         'Welcome to our **Support Channel!** Here, you can receive assistance, report or appeal a decision, request an interview for a rank, and ask any questions you may have.\n\n' +
         'Our friendly and dedicated staff are here to help you, but we ask that you treat them with the same respect and courtesy they show you. To ensure our support system remains a **safe, fair, and welcoming environment** for everyone, please follow the rules below:\n\n' +
         '## 1. Remain respectful to staff\n' +
