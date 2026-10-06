@@ -2699,46 +2699,29 @@ await interaction.editReply({
          * Add the NEW claimant.
          */
         const claimedTopic =
-            [
-                cleanTopic,
-                `claimed-by:${userId}`
-            ]
-                .filter(Boolean)
-                .join('|');
+    [
+        cleanTopic,
+        `claimed-by:${userId}`
+    ]
+        .filter(Boolean)
+        .join('|');
 
-        /*
-         * Stop the old ticket-state system from
-         * remembering an Unclaim state.
-         */
-        if (
-            ticketState &&
-            typeof ticketState.forgetTicket ===
-                'function'
-        ) {
-            ticketState.forgetTicket(
-                freshChannel.id
-            );
-        }
+/*
+ * Remove any old remembered ticket state.
+ */
+if (
+    ticketState &&
+    typeof ticketState.forgetTicket ===
+        'function'
+) {
+    ticketState.forgetTicket(
+        freshChannel.id
+    );
+}
 
-        /*
-         * THIS is the important part:
-         *
-         * Directly tell Discord to save:
-         *
-         * claimed-xxxxxxxx
-         *
-         * AND
-         *
-         * claimed-by:userId
-         *
-         * in the SAME request.
-         */
-        const updatedChannel =
-// Save the claim immediately in our local state.
-ticketState.forgetTicket(freshChannel.id);
-
-// Tell the user the claim succeeded NOW.
-// Do not wait for Discord's slow channel rename queue.
+/*
+ * Tell the user the Claim was accepted immediately.
+ */
 await interaction.editReply({
     content:
         isTakeover
@@ -2746,7 +2729,11 @@ await interaction.editReply({
             : '✅ Ticket claimed.'
 });
 
-// Update the channel name/topic separately.
+/*
+ * Update the channel name + claimed-by topic
+ * separately so Discord's channel edit does not
+ * hold up the interaction.
+ */
 freshChannel.edit({
     name: claimedName,
     topic: claimedTopic,
@@ -2758,9 +2745,19 @@ freshChannel.edit({
         `[CLAIM RENAME SUCCESS] ${updatedChannel.name}`
     );
 
-    ticketState.forgetTicket(
-        updatedChannel.id
-    );
+    /*
+     * Clear any old state after Discord confirms
+     * the new channel name/topic.
+     */
+    if (
+        ticketState &&
+        typeof ticketState.forgetTicket ===
+            'function'
+    ) {
+        ticketState.forgetTicket(
+            updatedChannel.id
+        );
+    }
 })
 .catch(error => {
     console.error(
@@ -2768,26 +2765,6 @@ freshChannel.edit({
         error
     );
 });
-
-        /*
-         * Clear any remembered old state AGAIN
-         * after Discord confirms the edit.
-         */
-        if (
-            ticketState &&
-            typeof ticketState.forgetTicket ===
-                'function'
-        ) {
-            ticketState.forgetTicket(
-                updatedChannel.id
-            );
-        }
-
-
-
-        /*
-         * ALWAYS send a Claim message.
-         */
         const claimText =
             isTakeover
                 ? `${ownerMention} | This ticket is now being handled by ${interaction.user}.`
