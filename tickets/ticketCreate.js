@@ -130,42 +130,84 @@ async function createTicket(
                 PermissionFlagsBits.SendMessages,
                 PermissionFlagsBits.ReadMessageHistory
             ]
-        },
-        {
-            id: supportRole.id,
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-            ]
-        },
-        {
-            id: seniorSupportRole.id,
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-            ]
-        },
-        {
-            id: reportsAppealsRole.id,
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-            ]
-        },
-        {
-            id: guild.members.me.id,
-            allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory,
-                PermissionFlagsBits.ManageChannels,
-                PermissionFlagsBits.ManageMessages
-            ]
         }
     ];
+
+    if (isReportsAppealsTicket) {
+        // Reports & Appeals tickets:
+        // SS = cannot view
+        // SSS = neutral (/)
+        // R/A = neutral (/)
+        permissionOverwrites.push(
+            {
+                id: supportRole.id,
+                deny: [PermissionFlagsBits.ViewChannel]
+            },
+            {
+                id: seniorSupportRole.id,
+                allow: [],
+                deny: []
+            },
+            {
+                id: reportsAppealsRole.id,
+                allow: [],
+                deny: []
+            }
+        );
+    } else if (isSeniorTicket) {
+        // Senior Support tickets:
+        // SS = cannot view
+        // R/A = cannot view
+        // SSS = neutral (/)
+        permissionOverwrites.push(
+            {
+                id: supportRole.id,
+                deny: [PermissionFlagsBits.ViewChannel]
+            },
+            {
+                id: seniorSupportRole.id,
+                allow: [],
+                deny: []
+            },
+            {
+                id: reportsAppealsRole.id,
+                deny: [PermissionFlagsBits.ViewChannel]
+            }
+        );
+    } else {
+        // Support tickets:
+        // R/A = cannot view
+        // SS = neutral (/)
+        // SSS = neutral (/)
+        permissionOverwrites.push(
+            {
+                id: supportRole.id,
+                allow: [],
+                deny: []
+            },
+            {
+                id: seniorSupportRole.id,
+                allow: [],
+                deny: []
+            },
+            {
+                id: reportsAppealsRole.id,
+                deny: [PermissionFlagsBits.ViewChannel]
+            }
+        );
+    }
+
+    // Keep the bot's current permissions unchanged.
+    permissionOverwrites.push({
+        id: guild.members.me.id,
+        allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageMessages
+        ]
+    });
 
     const ticketNumber =
         guild.channels.cache.filter(
