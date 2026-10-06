@@ -175,20 +175,51 @@ async function runSyncWorker(channel) {
 
 function claimTicket(channel, userId, options = {}) {
     const current = getDesiredState(channel);
-    const cleanBaseName = stripClaimedPrefix(current.name || channel.name);
 
-    return updateDesiredState(
+    const baseName = stripClaimedPrefix(
+        current.name || channel.name
+    );
+
+    const claimedName =
+        `claimed-${baseName}`.slice(0, 100);
+
+    const claimedTopic =
+        setClaimedBy(
+            current.topic || channel.topic,
+            userId
+        );
+
+    const nextState = updateDesiredState(
         channel,
         {
             claimedBy: userId,
-            name: `claimed-${cleanBaseName}`.slice(0, 100),
-            topic: setClaimedBy(current.topic || channel.topic, userId)
+            name: claimedName,
+            topic: claimedTopic
         },
         {
-            reason: options.reason || `Ticket claimed by ${userId}`,
-            delay: options.delay ?? 500
+            reason:
+                options.reason ||
+                `Ticket claimed by ${userId}`,
+            delay: 0
         }
     );
+
+    // Force the visual channel name immediately as well.
+    // This makes every Claim re-add "claimed-" even after Unclaim.
+    void channel.edit({
+        name: claimedName,
+        topic: claimedTopic,
+        reason:
+            options.reason ||
+            `Ticket claimed by ${userId}`
+    }).catch(error => {
+        console.error(
+            '[CLAIM CHANNEL UPDATE ERROR]',
+            error
+        );
+    });
+
+    return nextState;
 }
 
 function unclaimTicket(channel, options = {}) {
