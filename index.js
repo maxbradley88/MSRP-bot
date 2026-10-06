@@ -86,7 +86,11 @@ const client = new Client({
 
         GatewayIntentBits.Guilds,
 
-        GatewayIntentBits.GuildMembers
+        GatewayIntentBits.GuildMembers,
+
+        GatewayIntentBits.GuildMessages,
+
+        GatewayIntentBits.MessageContent
 
     ]
 
@@ -99,7 +103,9 @@ const activeClaimChannels = new Set();
 const CLOSE_LOG_CHANNEL_ID = '1556842177743556718';
 const optimisticClaimStates = new Map();
 const optimisticDepartmentStates = new Map();
+const optimisticChannelNames = new Map();
 const ticketChannelEditVersions = new Map();
+const ticketChannelEditQueues = new Map();
 
 
 
@@ -341,6 +347,17 @@ function stripClaimedPrefix(channelName) {
         );
 }
 
+function getEffectiveChannelName(channel) {
+    if (!channel) return '';
+
+    if (optimisticChannelNames.has(channel.id)) {
+        return optimisticChannelNames.get(channel.id);
+    }
+
+    return channel.name || '';
+}
+
+
 function formatTicketChannelName(value) {
     const cleaned = String(value || '')
         .trim()
@@ -362,7 +379,7 @@ function buildHandoffChannelName(channel, ownerId, requestedName) {
         return null;
     }
 
-    const baseName = stripClaimedPrefix(channel.name);
+    const baseName = stripClaimedPrefix(getEffectiveChannelName(channel));
     const ticketType = getTicketType(channel);
 
     let ownerUsername = null;
@@ -427,52 +444,290 @@ function applyOptimisticTicketState(channel, updates = {}) {
         );
     }
 
+    if (Object.prototype.hasOwnProperty.call(updates, 'name')) {
+        optimisticChannelNames.set(
+            channel.id,
+            updates.name
+        );
+    }
+
     return version;
 }
 
+function clearPersistedOptimisticState(channel, updatedChannel, version) {
+    if (ticketChannelEditVersions.get(channel.id) !== version) {
+        return;
+    }
+
+    if (optimisticClaimStates.has(channel.id)) {
+        const persistedClaim =
+            getClaimedUserIdFromTopic(updatedChannel.topic);
+
+        if (
+            optimisticClaimStates.get(channel.id) ===
+            persistedClaim
+        ) {
+            optimisticClaimStates.delete(channel.id);
+        }
+    }
+
+    if (optimisticDepartmentStates.has(channel.id)) {
+        const persistedDepartment =
+            getTicketDepartmentFromParentId(
+                updatedChannel.parentId
+            );
+
+        if (
+            optimisticDepartmentStates.get(channel.id) ===
+            persistedDepartment?.key
+        ) {
+            optimisticDepartmentStates.delete(channel.id);
+        }
+    }
+
+    if (optimisticChannelNames.has(channel.id)) {
+        if (
+            optimisticChannelNames.get(channel.id) ===
+            updatedChannel.name
+        ) {
+            optimisticChannelNames.delete(channel.id);
+        }
+    }
+}
+
+function clearFailedOptimisticState(channel, version) {
+    if (ticketChannelEditVersions.get(channel.id) !== version) {
+        return;
+    }
+
+    optimisticClaimStates.delete(channel.id);
+    optimisticDepartmentStates.delete(channel.id);
+    optimisticChannelNames.delete(channel.id);
+}
+
 function persistTicketChannelEdit(channel, data, version, label) {
-    void channel.edit(data)
+    const previous =
+        ticketChannelEditQueues.get(channel.id) ||
+        Promise.resolve();
+
+    const operation = previous
+        .catch(() => {})
+        .then(() => channel.edit(data))
         .then(updatedChannel => {
-            if (ticketChannelEditVersions.get(channel.id) !== version) {
-                return;
-            }
+            clearPersistedOptimisticState(
+                channel,
+                updatedChannel,
+                version
+            );
 
-            if (optimisticClaimStates.has(channel.id)) {
-                const persistedClaim =
-                    getClaimedUserIdFromTopic(updatedChannel.topic);
-
-                if (
-                    optimisticClaimStates.get(channel.id) ===
-                    persistedClaim
-                ) {
-                    optimisticClaimStates.delete(channel.id);
-                }
-            }
-
-            if (optimisticDepartmentStates.has(channel.id)) {
-                const persistedDepartment =
-                    getTicketDepartmentFromParentId(
-                        updatedChannel.parentId
-                    );
-
-                if (
-                    optimisticDepartmentStates.get(channel.id) ===
-                    persistedDepartment?.key
-                ) {
-                    optimisticDepartmentStates.delete(channel.id);
-                }
-            }
+            return updatedChannel;
         })
         .catch(error => {
+            clearFailedOptimisticState(
+                channel,
+                version
+            );
+
             console.error(
                 `[${label} CHANNEL EDIT ERROR]`,
                 error
             );
+
+            return null;
         });
+
+    ticketChannelEditQueues.set(
+        channel.id,
+        operation
+    );
+
+    void operation.finally(() => {
+        if (
+            ticketChannelEditQueues.get(channel.id) ===
+            operation
+        ) {
+            ticketChannelEditQueues.delete(channel.id);
+        }
+    });
+
+    return operation;
 }
 
-function sendCloseNotifications(ownerId, message) {
-    void (async () => {
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+async function fetchAllTicketMessages(channel) {
+    const messages = [];
+    let before = null;
+
+    while (true) {
+        const batch = await channel.messages.fetch({
+            limit: 100,
+            ...(before ? { before } : {}),
+            cache: false
+        });
+
+        if (batch.size === 0) {
+            break;
+        }
+
+        messages.push(...batch.values());
+
+        const oldest = batch.last();
+        before = oldest?.id || null;
+
+        if (batch.size < 100 || !before) {
+            break;
+        }
+    }
+
+    return messages.sort(
+        (a, b) => a.createdTimestamp - b.createdTimestamp
+    );
+}
+
+async function createTicketTranscript(channel) {
+    const messages = await fetchAllTicketMessages(channel);
+    const ownerId = getTicketOwnerId(channel);
+    const ticketType = getTicketTypeName(channel);
+    const generatedAt = new Date();
+
+    const messageHtml = messages.map(message => {
+        const authorName =
+            message.member?.displayName ||
+            message.author?.globalName ||
+            message.author?.username ||
+            'Unknown User';
+
+        const username =
+            message.author?.username ||
+            'unknown';
+
+        const authorId =
+            message.author?.id ||
+            'unknown';
+
+        const timestamp = new Date(
+            message.createdTimestamp
+        ).toLocaleString('en-AU', {
+            timeZone: 'Australia/Melbourne',
+            dateStyle: 'medium',
+            timeStyle: 'medium'
+        });
+
+        const content = message.content
+            ? `<div class="content">${escapeHtml(message.content).replace(/\n/g, '<br>')}</div>`
+            : '<div class="content muted">No text content</div>';
+
+        const attachments = [
+            ...message.attachments.values()
+        ];
+
+        const attachmentHtml = attachments.length
+            ? `<div class="attachments">${attachments.map(attachment => {
+                const name = escapeHtml(
+                    attachment.name || 'Attachment'
+                );
+                const url = escapeHtml(attachment.url);
+                return `<a href="${url}" target="_blank" rel="noreferrer">${name}</a>`;
+            }).join('')}</div>`
+            : '';
+
+        const embedHtml = message.embeds?.length
+            ? `<div class="embeds">${message.embeds.map(embed => {
+                const title = embed.title
+                    ? `<strong>${escapeHtml(embed.title)}</strong>`
+                    : '<strong>Embed</strong>';
+                const description = embed.description
+                    ? `<div>${escapeHtml(embed.description).replace(/\n/g, '<br>')}</div>`
+                    : '';
+                return `<div class="embed">${title}${description}</div>`;
+            }).join('')}</div>`
+            : '';
+
+        return `
+        <article class="message">
+            <div class="meta">
+                <span class="author">${escapeHtml(authorName)}</span>
+                <span class="username">@${escapeHtml(username)}</span>
+                <span class="id">${escapeHtml(authorId)}</span>
+                <span class="time">${escapeHtml(timestamp)}</span>
+                ${message.author?.bot ? '<span class="bot">BOT</span>' : ''}
+            </div>
+            ${content}
+            ${attachmentHtml}
+            ${embedHtml}
+        </article>`;
+    }).join('\n');
+
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MSRP Ticket Transcript - ${escapeHtml(channel.name)}</title>
+<style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #1e1f22; color: #dbdee1; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .wrap { width: min(1000px, calc(100% - 32px)); margin: 32px auto 64px; }
+    .header { background: #2b2d31; border: 1px solid #3f4147; border-radius: 14px; padding: 22px; margin-bottom: 18px; }
+    h1 { margin: 0 0 12px; color: #f2f3f5; font-size: 24px; }
+    .details { display: grid; gap: 6px; color: #b5bac1; font-size: 14px; }
+    .message { padding: 16px 18px; border-bottom: 1px solid #35373c; background: #2b2d31; }
+    .message:first-of-type { border-radius: 14px 14px 0 0; }
+    .message:last-of-type { border-radius: 0 0 14px 14px; border-bottom: 0; }
+    .meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; margin-bottom: 7px; }
+    .author { color: #f2f3f5; font-weight: 700; }
+    .username, .id, .time { color: #949ba4; font-size: 12px; }
+    .bot { background: #5865f2; color: white; border-radius: 4px; font-size: 10px; font-weight: 700; padding: 2px 5px; }
+    .content { line-height: 1.55; overflow-wrap: anywhere; white-space: normal; }
+    .muted { color: #949ba4; font-style: italic; }
+    .attachments { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+    .attachments a { color: #00a8fc; text-decoration: none; }
+    .embed { margin-top: 10px; padding: 10px 12px; border-left: 4px solid #5865f2; background: #232428; border-radius: 4px; line-height: 1.45; }
+    .empty { background: #2b2d31; border-radius: 14px; padding: 20px; color: #949ba4; }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <section class="header">
+        <h1>Melbourne State Roleplay Ticket Transcript</h1>
+        <div class="details">
+            <div><strong>Channel:</strong> #${escapeHtml(channel.name)}</div>
+            <div><strong>Ticket type:</strong> ${escapeHtml(ticketType)}</div>
+            <div><strong>Ticket owner:</strong> ${escapeHtml(ownerId || 'Unknown')}</div>
+            <div><strong>Messages:</strong> ${messages.length}</div>
+            <div><strong>Generated:</strong> ${escapeHtml(generatedAt.toLocaleString('en-AU', { timeZone: 'Australia/Melbourne' }))}</div>
+        </div>
+    </section>
+    ${messageHtml || '<div class="empty">No messages were found in this ticket.</div>'}
+</div>
+</body>
+</html>`;
+
+    const safeChannelName =
+        String(channel.name || 'ticket')
+            .toLowerCase()
+            .replace(/[^a-z0-9-]/g, '-')
+            .replace(/-+/g, '-')
+            .replace(/^-+|-+$/g, '') ||
+        'ticket';
+
+    return {
+        attachment: Buffer.from(html, 'utf8'),
+        name: `transcript-${safeChannelName}.html`
+    };
+}
+
+function sendCloseNotifications(ownerId, message, transcriptFile = null) {
+    return (async () => {
         const tasks = [];
 
         let logChannel =
@@ -491,9 +746,16 @@ function sendCloseNotifications(ownerId, message) {
             }
         }
 
+        const files = transcriptFile
+            ? [transcriptFile]
+            : [];
+
         if (logChannel?.isTextBased()) {
             tasks.push(
-                logChannel.send({ content: message })
+                logChannel.send({
+                    content: message,
+                    files
+                })
             );
         }
 
@@ -504,7 +766,10 @@ function sendCloseNotifications(ownerId, message) {
                         client.users.cache.get(ownerId) ||
                         await client.users.fetch(ownerId);
 
-                    await user.send(message);
+                    await user.send({
+                        content: message,
+                        files
+                    });
                 })()
             );
         }
@@ -1132,9 +1397,24 @@ client.on(
                         const closeMessage =
                             `Ticket closed | ${reason}`;
 
-                        sendCloseNotifications(
+                        let transcriptFile = null;
+
+                        try {
+                            transcriptFile =
+                                await createTicketTranscript(
+                                    channel
+                                );
+                        } catch (transcriptError) {
+                            console.error(
+                                '[TRANSCRIPT GENERATION ERROR]',
+                                transcriptError
+                            );
+                        }
+
+                        void sendCloseNotifications(
                             ownerId,
-                            closeMessage
+                            closeMessage,
+                            transcriptFile
                         );
 
                         const auditReason = (
@@ -1348,7 +1628,8 @@ client.on(
                             {
                                 claimedBy: null,
                                 departmentKey:
-                                    destination.key
+                                    destination.key,
+                                name: newName
                             }
                         );
 
@@ -1361,50 +1642,38 @@ client.on(
                     // Move, rename and unclaim in ONE Discord channel edit.
                     // This runs in the background so Discord rate limits do not
                     // leave the interaction sitting on "thinking" for minutes.
-                    void channel.edit({
-                        parent: destination.categoryId,
-                        lockPermissions: false,
-                        name: newName,
-                        topic: newTopic,
-                        reason:
-                            `Ticket handed off by ${interaction.user.tag}`
-                    })
+                    void persistTicketChannelEdit(
+                        channel,
+                        {
+                            parent: destination.categoryId,
+                            lockPermissions: false,
+                            name: newName,
+                            topic: newTopic,
+                            reason:
+                                `Ticket handed off by ${interaction.user.tag}`
+                        },
+                        version,
+                        'HANDOFF'
+                    )
                         .then(async updatedChannel => {
+                            if (!updatedChannel) {
+                                try {
+                                    await interaction.followUp({
+                                        content:
+                                            '❌ Discord could not complete this hand off. The ticket was not moved; please try again.',
+                                        flags: MessageFlags.Ephemeral
+                                    });
+                                } catch {}
+
+                                return;
+                            }
+
                             if (
                                 ticketChannelEditVersions.get(
                                     channel.id
                                 ) !== version
                             ) {
                                 return;
-                            }
-
-                            if (
-                                optimisticClaimStates.has(
-                                    channel.id
-                                ) &&
-                                optimisticClaimStates.get(
-                                    channel.id
-                                ) === null &&
-                                getClaimedUserIdFromTopic(
-                                    updatedChannel.topic
-                                ) === null
-                            ) {
-                                optimisticClaimStates.delete(
-                                    channel.id
-                                );
-                            }
-
-                            if (
-                                optimisticDepartmentStates.get(
-                                    channel.id
-                                ) === destination.key &&
-                                getTicketDepartmentFromParentId(
-                                    updatedChannel.parentId
-                                )?.key === destination.key
-                            ) {
-                                optimisticDepartmentStates.delete(
-                                    channel.id
-                                );
                             }
 
                             const ownerMention =
@@ -1485,33 +1754,6 @@ client.on(
                                     );
                                 }
                             }
-                        })
-                        .catch(async moveError => {
-                            if (
-                                ticketChannelEditVersions.get(
-                                    channel.id
-                                ) === version
-                            ) {
-                                optimisticDepartmentStates.delete(
-                                    channel.id
-                                );
-                                optimisticClaimStates.delete(
-                                    channel.id
-                                );
-                            }
-
-                            console.error(
-                                '[HANDOFF MOVE ERROR]',
-                                moveError
-                            );
-
-                            try {
-                                await interaction.followUp({
-                                    content:
-                                        '❌ Discord could not complete this hand off. The ticket was not moved; please try again.',
-                                    flags: MessageFlags.Ephemeral
-                                });
-                            } catch {}
                         });
                     return;
                 }
@@ -1594,7 +1836,7 @@ client.on(
 
                     const newName =
                         stripClaimedPrefix(
-                            channel.name
+                            getEffectiveChannelName(channel)
                         );
 
                     const newTopic =
@@ -1604,33 +1846,43 @@ client.on(
                                 ''
                             );
 
+                    const version =
+                        applyOptimisticTicketState(
+                            channel,
+                            {
+                                claimedBy: null,
+                                name: newName
+                            }
+                        );
+
                     await interaction.reply({
                         content:
-                            '⏳ Unclaiming ticket...',
+                            '✅ Ticket unclaim accepted.',
                         flags: MessageFlags.Ephemeral
                     });
 
-                    try {
-                        optimisticClaimStates.set(
-                            channel.id,
-                            null
-                        );
-
-                        await channel.edit({
+                    void persistTicketChannelEdit(
+                        channel,
+                        {
                             name: newName,
                             topic: newTopic,
                             reason:
                                 `Ticket unclaimed by ${interaction.user.tag}`
-                        });
+                        },
+                        version,
+                        'UNCLAIM'
+                    ).then(async updatedChannel => {
+                        if (!updatedChannel) {
+                            try {
+                                await interaction.followUp({
+                                    content:
+                                        '❌ Discord could not finish unclaiming this ticket. Please try again.',
+                                    flags: MessageFlags.Ephemeral
+                                });
+                            } catch {}
 
-                        optimisticClaimStates.delete(
-                            channel.id
-                        );
-
-                        await interaction.editReply({
-                            content:
-                                '✅ Ticket unclaimed successfully.'
-                        });
+                            return;
+                        }
 
                         const ownerMention =
                             ownerId
@@ -1696,23 +1948,7 @@ client.on(
                                 );
                             }
                         }
-                    } catch (error) {
-                        optimisticClaimStates.delete(
-                            channel.id
-                        );
-
-                        console.error(
-                            '[UNCLAIM MODAL ERROR]',
-                            error
-                        );
-
-                        try {
-                            await interaction.editReply({
-                                content:
-                                    '❌ Something went wrong while unclaiming this ticket.'
-                            });
-                        } catch {}
-                    }
+                    });
 
                     return;
                 }
@@ -2188,7 +2424,7 @@ client.on(
                             getTicketTypeName(channel);
 
                         const newName =
-                            `claimed-${stripClaimedPrefix(channel.name)}`;
+                            `claimed-${stripClaimedPrefix(getEffectiveChannelName(channel))}`;
 
                         const topic =
                             String(channel.topic || '')
@@ -2206,7 +2442,10 @@ client.on(
                         const version =
                             applyOptimisticTicketState(
                                 channel,
-                                { claimedBy: userId }
+                                {
+                                    claimedBy: userId,
+                                    name: newName
+                                }
                             );
 
                         await interaction.reply({
