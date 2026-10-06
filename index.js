@@ -2471,213 +2471,365 @@ client.on(
 
 
 
-                // ==================================================
+// ==================================================
+// CLAIM
+// ==================================================
 
-                // CLAIM
+if (
+    interaction.customId ===
+    'ticket_claim'
+) {
+    const channel = interaction.channel;
+    const userId = interaction.user.id;
 
-                // ==================================================
+    // Acknowledge immediately so Discord never sits
+    // on "Melbourne State Roleplay is thinking..."
+    await interaction.deferReply({
+        flags: MessageFlags.Ephemeral
+    });
 
-                if (
-                    interaction.customId ===
-                    'ticket_claim'
-                ) {
-                    const channel = interaction.channel;
-                    const userId = interaction.user.id;
+    if (
+        !channel ||
+        !channel.isTextBased()
+    ) {
+        await interaction.editReply({
+            content:
+                '❌ This ticket channel could not be found.'
+        });
 
-                    if (!channel || !channel.isTextBased()) {
-                        await interaction.reply({
-                            content: '❌ This ticket channel could not be found.',
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
+        return;
+    }
 
-                    const ownerId = getTicketOwnerId(channel);
+    /*
+     * Always fetch the latest version of the channel.
+     *
+     * This prevents an old cached channel name/topic
+     * from being used after Claim -> Unclaim -> Claim.
+     */
+    let freshChannel;
 
-                    if (
-                        ownerId === userId &&
-                        !isTicketOwnerStaffTestingAllowed(
-                            interaction.member,
-                            ownerId,
-                            userId
-                        )
-                    ) {
-                        await interaction.reply({
-                            content: '❌ The user who created the ticket cannot use staff ticket buttons.',
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    // Acknowledge the interaction immediately. Any Discord
-                    // channel rename/topic rate limit can then happen later
-                    // without causing "This interaction failed".
-                    try {
-                        await interaction.deferReply({
-                            flags: MessageFlags.Ephemeral
-                        });
-                    } catch (error) {
-                        console.error(
-                            '[CLAIM DEFER ERROR]',
-                            error
-                        );
-                        return;
-                    }
-
-                    const claimPermission =
-                        getTicketActionPermission(
-                            interaction.member,
-                            channel,
-                            'claim',
-                            userId
-                        );
-
-                    if (!claimPermission.allowed) {
-                        await interaction.editReply({
-                            content: claimPermission.message
-                        });
-                        return;
-                    }
-
-                    if (activeClaimChannels.has(channel.id)) {
-                        await interaction.editReply({
-                            content: '❌ Another claim action is already being processed for this ticket. Please try again.'
-                        });
-                        return;
-                    }
-
-                    activeClaimChannels.add(channel.id);
-
-                    try {
-                        const latestPermission =
-                            getTicketActionPermission(
-                                interaction.member,
-                                channel,
-                                'claim',
-                                userId
-                            );
-
-                        if (!latestPermission.allowed) {
-                            await interaction.editReply({
-                                content:
-                                    latestPermission.message
-                            });
-                            return;
-                        }
-
-                        const latestClaim =
-                            latestPermission.claimedBy;
-
-                        const ownerMention = ownerId
-                            ? `<@${ownerId}>`
-                            : 'Customer';
-
-                        const ticketTypeName =
-                            getTicketTypeName(channel);
-
-                        const isTakeover = Boolean(
-                            latestClaim &&
-                            latestClaim !== userId
-                        );
-
-                        // Single source of truth: every Claim forces exactly
-                        // one desired state with claimed- in the name and the
-                        // claimant in the topic. Older Unclaim/Handoff state
-                        // can never overwrite this latest action.
-const freshChannel =
-    await interaction.guild.channels.fetch(
-        channel.id,
-        { force: true }
-    );
-
-if (!freshChannel) {
-    throw new Error(
-        'Ticket channel could not be found.'
-    );
-}
-
-const cleanName =
-    freshChannel.name
-        .replace(/^(?:claimed-)+/i, '');
-
-const claimedName =
-    `claimed-${cleanName}`.slice(0, 100);
-
-const cleanTopic =
-    String(freshChannel.topic || '')
-        .replace(
-            /(?:^|\|)claimed-by:\d+/g,
-            ''
-        )
-        .replace(/^\|+|\|+$/g, '')
-        .replace(/\|{2,}/g, '|');
-
-const claimedTopic =
-    `${cleanTopic}${cleanTopic ? '|' : ''}` +
-    `claimed-by:${userId}`;
-
-// Remove any old remembered state first.
-ticketState.forgetTicket(channel.id);
-
-// Force Discord itself to save the claimed state.
-await freshChannel.edit({
-    name: claimedName,
-    topic: claimedTopic,
-    reason:
-        `Ticket claimed by ${interaction.user.tag}`
-});
-
-// Clear cache again so future actions read the
-// state Discord has actually saved.
-ticketState.forgetTicket(channel.id);
-
-                        await interaction.editReply({
-                            content: isTakeover
-                                ? '✅ Ticket taken over successfully.'
-                                : '✅ Ticket claimed.'
-                        });
-
-                        // Always send a visible claim message immediately.
-                        // This is deliberately independent from the slower
-                        // channel rename/topic update.
-                        const claimText = isTakeover
-                            ? `${ownerMention} | This ticket is now being handled by ${interaction.user}.`
-                            : `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`;
-
-                        const mentionUsers =
-                            [ownerId, userId].filter(Boolean);
-
-                        await sendTicketActionMessage(
-                            channel,
-                            claimText,
-                            {
-                                users: [
-                                    ...new Set(mentionUsers)
-                                ]
-                            },
-                            'CLAIM'
-                        );
-
-                    } catch (error) {
-                        console.error(
-                            '[CLAIM ERROR]',
-                            error
-                        );
-
-                        try {
-                            await interaction.editReply({
-                                content:
-                                    '❌ Something went wrong while claiming this ticket.'
-                            });
-                        } catch {}
-                    } finally {
-                        activeClaimChannels.delete(
-                            channel.id
-                        );
-                    }
-
-                    return;
+    try {
+        freshChannel =
+            await interaction.guild.channels.fetch(
+                channel.id,
+                {
+                    force: true
                 }
+            );
+    } catch (error) {
+        console.error(
+            '[CLAIM FETCH ERROR]',
+            error
+        );
+
+        await interaction.editReply({
+            content:
+                '❌ This ticket channel could not be found.'
+        });
+
+        return;
+    }
+
+    if (
+        !freshChannel ||
+        !freshChannel.isTextBased()
+    ) {
+        await interaction.editReply({
+            content:
+                '❌ This ticket channel could not be found.'
+        });
+
+        return;
+    }
+
+    const ownerId =
+        getTicketOwnerId(
+            freshChannel
+        );
+
+    if (
+        ownerId === userId &&
+        !isTicketOwnerStaffTestingAllowed(
+            interaction.member,
+            ownerId,
+            userId
+        )
+    ) {
+        await interaction.editReply({
+            content:
+                '❌ The user who created the ticket cannot use staff ticket buttons.'
+        });
+
+        return;
+    }
+
+    const claimPermission =
+        getTicketActionPermission(
+            interaction.member,
+            freshChannel,
+            'claim',
+            userId
+        );
+
+    if (
+        !claimPermission.allowed
+    ) {
+        await interaction.editReply({
+            content:
+                claimPermission.message
+        });
+
+        return;
+    }
+
+    if (
+        activeClaimChannels.has(
+            freshChannel.id
+        )
+    ) {
+        await interaction.editReply({
+            content:
+                '❌ Another claim action is already being processed for this ticket. Please try again.'
+        });
+
+        return;
+    }
+
+    activeClaimChannels.add(
+        freshChannel.id
+    );
+
+    try {
+        /*
+         * Check permissions again now that the
+         * claim lock has been acquired.
+         */
+        const latestPermission =
+            getTicketActionPermission(
+                interaction.member,
+                freshChannel,
+                'claim',
+                userId
+            );
+
+        if (
+            !latestPermission.allowed
+        ) {
+            await interaction.editReply({
+                content:
+                    latestPermission.message
+            });
+
+            return;
+        }
+
+        const previousClaim =
+            latestPermission.claimedBy;
+
+        const isTakeover =
+            Boolean(
+                previousClaim &&
+                previousClaim !== userId
+            );
+
+        const ownerMention =
+            ownerId
+                ? `<@${ownerId}>`
+                : 'Customer';
+
+        const ticketTypeName =
+            getTicketTypeName(
+                freshChannel
+            );
+
+        /*
+         * IMPORTANT:
+         *
+         * Remove ALL existing claimed- prefixes first.
+         *
+         * Then ALWAYS add exactly ONE claimed- prefix.
+         *
+         * Examples:
+         *
+         * general-max-001
+         * -> claimed-general-max-001
+         *
+         * claimed-general-max-001
+         * -> claimed-general-max-001
+         *
+         * claimed-claimed-general-max-001
+         * -> claimed-general-max-001
+         */
+        const cleanName =
+            String(
+                freshChannel.name || ''
+            )
+                .replace(
+                    /^(?:claimed-)+/i,
+                    ''
+                );
+
+        const claimedName =
+            `claimed-${cleanName}`
+                .slice(0, 100);
+
+        /*
+         * Remove any old claimed-by value.
+         */
+        const cleanTopic =
+            String(
+                freshChannel.topic || ''
+            )
+                .split('|')
+                .filter(
+                    section =>
+                        !section.startsWith(
+                            'claimed-by:'
+                        )
+                )
+                .filter(Boolean)
+                .join('|');
+
+        /*
+         * Add the NEW claimant.
+         */
+        const claimedTopic =
+            [
+                cleanTopic,
+                `claimed-by:${userId}`
+            ]
+                .filter(Boolean)
+                .join('|');
+
+        /*
+         * Stop the old ticket-state system from
+         * remembering an Unclaim state.
+         */
+        if (
+            ticketState &&
+            typeof ticketState.forgetTicket ===
+                'function'
+        ) {
+            ticketState.forgetTicket(
+                freshChannel.id
+            );
+        }
+
+        /*
+         * THIS is the important part:
+         *
+         * Directly tell Discord to save:
+         *
+         * claimed-xxxxxxxx
+         *
+         * AND
+         *
+         * claimed-by:userId
+         *
+         * in the SAME request.
+         */
+        const updatedChannel =
+            await freshChannel.edit({
+                name: claimedName,
+                topic: claimedTopic,
+                reason:
+                    `Ticket claimed by ${interaction.user.tag}`
+            });
+
+        /*
+         * Clear any remembered old state AGAIN
+         * after Discord confirms the edit.
+         */
+        if (
+            ticketState &&
+            typeof ticketState.forgetTicket ===
+                'function'
+        ) {
+            ticketState.forgetTicket(
+                updatedChannel.id
+            );
+        }
+
+        await interaction.editReply({
+            content:
+                isTakeover
+                    ? '✅ Ticket taken over successfully.'
+                    : '✅ Ticket claimed.'
+        });
+
+        /*
+         * ALWAYS send a Claim message.
+         */
+        const claimText =
+            isTakeover
+                ? `${ownerMention} | This ticket is now being handled by ${interaction.user}.`
+                : `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`;
+
+        const mentionUsers =
+            [
+                ownerId,
+                userId
+            ].filter(Boolean);
+
+        try {
+            await sendTicketActionMessage(
+                updatedChannel,
+                claimText,
+                {
+                    users: [
+                        ...new Set(
+                            mentionUsers
+                        )
+                    ]
+                },
+                'CLAIM'
+            );
+        } catch (error) {
+            /*
+             * A failed notification must NEVER
+             * undo a successful Claim.
+             */
+            console.error(
+                '[CLAIM MESSAGE ERROR]',
+                error
+            );
+
+            try {
+                await updatedChannel.send({
+                    content:
+                        claimText
+                });
+            } catch (
+                fallbackError
+            ) {
+                console.error(
+                    '[CLAIM FALLBACK MESSAGE ERROR]',
+                    fallbackError
+                );
+            }
+        }
+
+    } catch (error) {
+        console.error(
+            '[CLAIM ERROR]',
+            error
+        );
+
+        try {
+            await interaction.editReply({
+                content:
+                    '❌ Something went wrong while claiming this ticket.'
+            });
+        } catch {}
+
+    } finally {
+        activeClaimChannels.delete(
+            channel.id
+        );
+    }
+
+    return;
+}
 
 
 
