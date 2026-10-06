@@ -2714,13 +2714,23 @@ if (
     typeof ticketState.forgetTicket ===
         'function'
 ) {
-    ticketState.forgetTicket(
-        freshChannel.id
-    );
-}
+ticketState.forgetTicket(
+    freshChannel.id
+);
 
 /*
- * Tell the user the Claim was accepted immediately.
+ * Immediately update the channel object in memory.
+ * This means permission checks know the ticket is
+ * claimed BEFORE Discord finishes the rename.
+ */
+freshChannel.name = claimedName;
+freshChannel.topic = claimedTopic;
+
+channel.name = claimedName;
+channel.topic = claimedTopic;
+
+/*
+ * Tell the staff member immediately.
  */
 await interaction.editReply({
     content:
@@ -2730,41 +2740,78 @@ await interaction.editReply({
 });
 
 /*
- * Update the channel name + claimed-by topic
- * separately so Discord's channel edit does not
- * hold up the interaction.
+ * Update the real Discord channel separately.
+ * Do not make the Claim interaction wait for it.
  */
-freshChannel.edit({
-    name: claimedName,
-    topic: claimedTopic,
-    reason:
-        `Ticket claimed by ${interaction.user.tag}`
-})
-.then(updatedChannel => {
-    console.log(
-        `[CLAIM RENAME SUCCESS] ${updatedChannel.name}`
-    );
+void (async () => {
+    try {
+        const updatedChannel =
+            await freshChannel.edit({
+                name: claimedName,
+                topic: claimedTopic,
+                reason:
+                    `Ticket claimed by ${interaction.user.tag}`
+            });
 
-    /*
-     * Clear any old state after Discord confirms
-     * the new channel name/topic.
-     */
-    if (
-        ticketState &&
-        typeof ticketState.forgetTicket ===
-            'function'
-    ) {
+        console.log(
+            `[CLAIM RENAME SUCCESS] ${updatedChannel.name}`
+        );
+
         ticketState.forgetTicket(
             updatedChannel.id
         );
+    } catch (error) {
+        console.error(
+            '[CLAIM RENAME ERROR]',
+            error
+        );
     }
-})
-.catch(error => {
+})();
+
+/*
+ * ALWAYS send the visible Claim message.
+ */
+const claimText =
+    isTakeover
+        ? `${ownerMention} | This ticket is now being handled by ${interaction.user}.`
+        : `${ownerMention} | ${interaction.user} has claimed this ${ticketTypeName} ticket.`;
+
+const mentionUsers =
+    [
+        ownerId,
+        userId
+    ].filter(Boolean);
+
+try {
+    await sendTicketActionMessage(
+        freshChannel,
+        claimText,
+        {
+            users: [
+                ...new Set(
+                    mentionUsers
+                )
+            ]
+        },
+        'CLAIM'
+    );
+} catch (error) {
     console.error(
-        '[CLAIM RENAME ERROR]',
+        '[CLAIM MESSAGE ERROR]',
         error
     );
-});
+
+    try {
+        await freshChannel.send({
+            content: claimText
+        });
+    } catch (fallbackError) {
+        console.error(
+            '[CLAIM FALLBACK MESSAGE ERROR]',
+            fallbackError
+        );
+    }
+}
         const claimText =
             isTakeover
                 ? `${ownerMention} | This ticket is now being handled by ${interaction.user}.`
