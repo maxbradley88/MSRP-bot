@@ -105,7 +105,8 @@ const optimisticClaimStates = new Map();
 const optimisticDepartmentStates = new Map();
 const optimisticChannelNames = new Map();
 const ticketChannelEditVersions = new Map();
-const ticketChannelEditQueues = new Map();
+const ticketChannelEditPending = new Map();
+const ticketChannelEditWorkers = new Map();
 
 
 
@@ -459,40 +460,31 @@ function clearPersistedOptimisticState(channel, updatedChannel, version) {
         return;
     }
 
-    if (optimisticClaimStates.has(channel.id)) {
-        const persistedClaim =
-            getClaimedUserIdFromTopic(updatedChannel.topic);
+    // Keep the latest confirmed state in memory instead of immediately
+    // falling back to a possibly stale discord.js channel cache.
+    optimisticClaimStates.set(
+        channel.id,
+        getClaimedUserIdFromTopic(updatedChannel.topic)
+    );
 
-        if (
-            optimisticClaimStates.get(channel.id) ===
-            persistedClaim
-        ) {
-            optimisticClaimStates.delete(channel.id);
-        }
+    const persistedDepartment =
+        getTicketDepartmentFromParentId(
+            updatedChannel.parentId
+        );
+
+    if (persistedDepartment) {
+        optimisticDepartmentStates.set(
+            channel.id,
+            persistedDepartment.key
+        );
+    } else {
+        optimisticDepartmentStates.delete(channel.id);
     }
 
-    if (optimisticDepartmentStates.has(channel.id)) {
-        const persistedDepartment =
-            getTicketDepartmentFromParentId(
-                updatedChannel.parentId
-            );
-
-        if (
-            optimisticDepartmentStates.get(channel.id) ===
-            persistedDepartment?.key
-        ) {
-            optimisticDepartmentStates.delete(channel.id);
-        }
-    }
-
-    if (optimisticChannelNames.has(channel.id)) {
-        if (
-            optimisticChannelNames.get(channel.id) ===
-            updatedChannel.name
-        ) {
-            optimisticChannelNames.delete(channel.id);
-        }
-    }
+    optimisticChannelNames.set(
+        channel.id,
+        updatedChannel.name || channel.name || ''
+    );
 }
 
 function clearFailedOptimisticState(channel, version) {
@@ -505,61 +497,139 @@ function clearFailedOptimisticState(channel, version) {
     optimisticChannelNames.delete(channel.id);
 }
 
-function persistTicketChannelEdit(channel, data, version, label) {
-    const previous =
-        ticketChannelEditQueues.get(channel.id) ||
-        Promise.resolve();
+function startTicketChannelEditWorker(channelId) {
+    if (
+        ticketChannelEditWorkers.has(channelId)
+    ) {
+        return;
+    }
 
-    const operation = previous
-        .catch(() => {})
-        .then(() => channel.edit(data))
-        .then(updatedChannel => {
-            clearPersistedOptimisticState(
-                channel,
-                updatedChannel,
-                version
+    const worker = (async () => {
+        // Small debounce so actions fired almost together can collapse
+        // into one Discord API request.
+        await new Promise(resolve =>
+            setTimeout(resolve, 100)
+        );
+
+        while (true) {
+            const job =
+                ticketChannelEditPending.get(
+                    channelId
+                );
+
+            if (!job) {
+                break;
+            }
+
+            ticketChannelEditPending.delete(
+                channelId
             );
 
-            return updatedChannel;
-        })
-        .catch(error => {
-            clearFailedOptimisticState(
-                channel,
-                version
-            );
+            let updatedChannel = null;
 
-            console.error(
-                `[${label} CHANNEL EDIT ERROR]`,
-                error
-            );
+            try {
+                updatedChannel =
+                    await job.channel.edit(
+                        job.data
+                    );
 
-            return null;
-        });
+                clearPersistedOptimisticState(
+                    job.channel,
+                    updatedChannel,
+                    job.version
+                );
+            } catch (error) {
+                clearFailedOptimisticState(
+                    job.channel,
+                    job.version
+                );
 
-    ticketChannelEditQueues.set(
-        channel.id,
-        operation
-    );
+                console.error(
+                    `[${job.label} CHANNEL EDIT ERROR]`,
+                    error
+                );
+            }
 
-    void operation.finally(() => {
+            for (
+                const resolve of job.waiters
+            ) {
+                resolve(updatedChannel);
+            }
+
+            if (
+                ticketChannelEditPending.has(
+                    channelId
+                )
+            ) {
+                await new Promise(resolve =>
+                    setTimeout(resolve, 75)
+                );
+            }
+        }
+    })().finally(() => {
+        ticketChannelEditWorkers.delete(
+            channelId
+        );
+
+        // If another action arrived just as the worker finished,
+        // immediately start a fresh worker for that latest state.
         if (
-            ticketChannelEditQueues.get(channel.id) ===
-            operation
+            ticketChannelEditPending.has(
+                channelId
+            )
         ) {
-            ticketChannelEditQueues.delete(channel.id);
+            startTicketChannelEditWorker(
+                channelId
+            );
         }
     });
 
-    return operation;
+    ticketChannelEditWorkers.set(
+        channelId,
+        worker
+    );
 }
 
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+function persistTicketChannelEdit(channel, data, version, label) {
+    const channelId = channel.id;
+
+    let resolveRequest;
+    const requestPromise = new Promise(resolve => {
+        resolveRequest = resolve;
+    });
+
+    const pending =
+        ticketChannelEditPending.get(channelId);
+
+    if (pending) {
+        // Only keep the newest desired values. This prevents a rapid
+        // Claim -> Unclaim -> Claim sequence from building a long queue
+        // of obsolete Discord channel edits.
+        pending.data = {
+            ...pending.data,
+            ...data
+        };
+        pending.version = version;
+        pending.label = label;
+        pending.waiters.push(resolveRequest);
+    } else {
+        ticketChannelEditPending.set(
+            channelId,
+            {
+                channel,
+                data: { ...data },
+                version,
+                label,
+                waiters: [resolveRequest]
+            }
+        );
+    }
+
+    startTicketChannelEditWorker(
+        channelId
+    );
+
+    return requestPromise;
 }
 
 async function fetchAllTicketMessages(channel) {
@@ -588,17 +658,39 @@ async function fetchAllTicketMessages(channel) {
     }
 
     return messages.sort(
-        (a, b) => a.createdTimestamp - b.createdTimestamp
+        (a, b) =>
+            a.createdTimestamp -
+            b.createdTimestamp
     );
 }
 
 async function createTicketTranscript(channel) {
-    const messages = await fetchAllTicketMessages(channel);
-    const ownerId = getTicketOwnerId(channel);
-    const ticketType = getTicketTypeName(channel);
-    const generatedAt = new Date();
+    const messages =
+        await fetchAllTicketMessages(channel);
 
-    const messageHtml = messages.map(message => {
+    const generatedAt =
+        new Date().toLocaleString('en-AU', {
+            timeZone: 'Australia/Melbourne',
+            dateStyle: 'medium',
+            timeStyle: 'medium'
+        });
+
+    const lines = [
+        'Melbourne State Roleplay Ticket Transcript',
+        `Ticket: #${channel.name}`,
+        `Generated: ${generatedAt}`,
+        '',
+        '----------------------------------------',
+        ''
+    ];
+
+    if (messages.length === 0) {
+        lines.push(
+            'No messages were found in this ticket.'
+        );
+    }
+
+    for (const message of messages) {
         const authorName =
             message.member?.displayName ||
             message.author?.globalName ||
@@ -609,108 +701,60 @@ async function createTicketTranscript(channel) {
             message.author?.username ||
             'unknown';
 
-        const authorId =
-            message.author?.id ||
-            'unknown';
+        const timestamp =
+            new Date(
+                message.createdTimestamp
+            ).toLocaleString('en-AU', {
+                timeZone:
+                    'Australia/Melbourne',
+                dateStyle: 'short',
+                timeStyle: 'medium'
+            });
 
-        const timestamp = new Date(
-            message.createdTimestamp
-        ).toLocaleString('en-AU', {
-            timeZone: 'Australia/Melbourne',
-            dateStyle: 'medium',
-            timeStyle: 'medium'
-        });
+        lines.push(
+            `[${timestamp}] ${authorName} (@${username})${message.author?.bot ? ' [BOT]' : ''}`
+        );
 
-        const content = message.content
-            ? `<div class="content">${escapeHtml(message.content).replace(/\n/g, '<br>')}</div>`
-            : '<div class="content muted">No text content</div>';
+        if (message.content) {
+            lines.push(message.content);
+        }
 
-        const attachments = [
-            ...message.attachments.values()
-        ];
+        for (
+            const attachment of
+            message.attachments.values()
+        ) {
+            lines.push(
+                `[Attachment] ${attachment.name || 'Attachment'}: ${attachment.url}`
+            );
+        }
 
-        const attachmentHtml = attachments.length
-            ? `<div class="attachments">${attachments.map(attachment => {
-                const name = escapeHtml(
-                    attachment.name || 'Attachment'
+        for (const embed of message.embeds || []) {
+            if (embed.title) {
+                lines.push(
+                    `[Embed] ${embed.title}`
                 );
-                const url = escapeHtml(attachment.url);
-                return `<a href="${url}" target="_blank" rel="noreferrer">${name}</a>`;
-            }).join('')}</div>`
-            : '';
+            }
 
-        const embedHtml = message.embeds?.length
-            ? `<div class="embeds">${message.embeds.map(embed => {
-                const title = embed.title
-                    ? `<strong>${escapeHtml(embed.title)}</strong>`
-                    : '<strong>Embed</strong>';
-                const description = embed.description
-                    ? `<div>${escapeHtml(embed.description).replace(/\n/g, '<br>')}</div>`
-                    : '';
-                return `<div class="embed">${title}${description}</div>`;
-            }).join('')}</div>`
-            : '';
+            if (embed.description) {
+                lines.push(
+                    embed.description
+                );
+            }
+        }
 
-        return `
-        <article class="message">
-            <div class="meta">
-                <span class="author">${escapeHtml(authorName)}</span>
-                <span class="username">@${escapeHtml(username)}</span>
-                <span class="id">${escapeHtml(authorId)}</span>
-                <span class="time">${escapeHtml(timestamp)}</span>
-                ${message.author?.bot ? '<span class="bot">BOT</span>' : ''}
-            </div>
-            ${content}
-            ${attachmentHtml}
-            ${embedHtml}
-        </article>`;
-    }).join('\n');
+        if (
+            !message.content &&
+            message.attachments.size === 0 &&
+            (!message.embeds ||
+                message.embeds.length === 0)
+        ) {
+            lines.push(
+                '(No text content)'
+            );
+        }
 
-    const html = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MSRP Ticket Transcript - ${escapeHtml(channel.name)}</title>
-<style>
-    :root { color-scheme: dark; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #1e1f22; color: #dbdee1; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    .wrap { width: min(1000px, calc(100% - 32px)); margin: 32px auto 64px; }
-    .header { background: #2b2d31; border: 1px solid #3f4147; border-radius: 14px; padding: 22px; margin-bottom: 18px; }
-    h1 { margin: 0 0 12px; color: #f2f3f5; font-size: 24px; }
-    .details { display: grid; gap: 6px; color: #b5bac1; font-size: 14px; }
-    .message { padding: 16px 18px; border-bottom: 1px solid #35373c; background: #2b2d31; }
-    .message:first-of-type { border-radius: 14px 14px 0 0; }
-    .message:last-of-type { border-radius: 0 0 14px 14px; border-bottom: 0; }
-    .meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; margin-bottom: 7px; }
-    .author { color: #f2f3f5; font-weight: 700; }
-    .username, .id, .time { color: #949ba4; font-size: 12px; }
-    .bot { background: #5865f2; color: white; border-radius: 4px; font-size: 10px; font-weight: 700; padding: 2px 5px; }
-    .content { line-height: 1.55; overflow-wrap: anywhere; white-space: normal; }
-    .muted { color: #949ba4; font-style: italic; }
-    .attachments { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-    .attachments a { color: #00a8fc; text-decoration: none; }
-    .embed { margin-top: 10px; padding: 10px 12px; border-left: 4px solid #5865f2; background: #232428; border-radius: 4px; line-height: 1.45; }
-    .empty { background: #2b2d31; border-radius: 14px; padding: 20px; color: #949ba4; }
-</style>
-</head>
-<body>
-<div class="wrap">
-    <section class="header">
-        <h1>Melbourne State Roleplay Ticket Transcript</h1>
-        <div class="details">
-            <div><strong>Channel:</strong> #${escapeHtml(channel.name)}</div>
-            <div><strong>Ticket type:</strong> ${escapeHtml(ticketType)}</div>
-            <div><strong>Ticket owner:</strong> ${escapeHtml(ownerId || 'Unknown')}</div>
-            <div><strong>Messages:</strong> ${messages.length}</div>
-            <div><strong>Generated:</strong> ${escapeHtml(generatedAt.toLocaleString('en-AU', { timeZone: 'Australia/Melbourne' }))}</div>
-        </div>
-    </section>
-    ${messageHtml || '<div class="empty">No messages were found in this ticket.</div>'}
-</div>
-</body>
-</html>`;
+        lines.push('');
+    }
 
     const safeChannelName =
         String(channel.name || 'ticket')
@@ -721,8 +765,12 @@ async function createTicketTranscript(channel) {
         'ticket';
 
     return {
-        attachment: Buffer.from(html, 'utf8'),
-        name: `transcript-${safeChannelName}.html`
+        attachment: Buffer.from(
+            lines.join('\n'),
+            'utf8'
+        ),
+        name:
+            `transcript-${safeChannelName}.txt`
     };
 }
 
@@ -1347,9 +1395,9 @@ client.on(
                         return;
                     }
 
-                    if (!isSupportMember(interaction.member)) {
+                    if (!isSenior) {
                         await interaction.reply({
-                            content: '❌ Only a member of the MSRP support team can use this.',
+                            content: '❌ Only Senior Support Staff can close tickets.',
                             flags: MessageFlags.Ephemeral
                         });
                         return;
@@ -1357,20 +1405,9 @@ client.on(
 
                     const claimedBy = getClaimedUserId(channel);
 
-                    if (!isSenior && !claimedBy) {
+                    if (!claimedBy) {
                         await interaction.reply({
-                            content: '❌ You must claim this ticket before you can close it.',
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    if (
-                        !isSenior &&
-                        claimedBy !== interaction.user.id
-                    ) {
-                        await interaction.reply({
-                            content: '❌ You can only close tickets that you have claimed.',
+                            content: '❌ This ticket must be claimed before it can be closed.',
                             flags: MessageFlags.Ephemeral
                         });
                         return;
@@ -1495,31 +1532,19 @@ client.on(
                         return;
                     }
 
-                    if (!isSupportMember(interaction.member)) {
+                    if (!isSenior) {
                         await interaction.reply({
                             content:
-                                '❌ Only a support member can use this.',
+                                '❌ Only Senior Support Staff can hand off tickets.',
                             flags: MessageFlags.Ephemeral
                         });
                         return;
                     }
 
-                    if (!isSenior && !claimedBy) {
+                    if (!claimedBy) {
                         await interaction.reply({
                             content:
-                                '❌ You must claim this ticket before you can hand it off.',
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    if (
-                        !isSenior &&
-                        claimedBy !== interaction.user.id
-                    ) {
-                        await interaction.reply({
-                            content:
-                                '❌ You can only hand off tickets that you have claimed.',
+                                '❌ This ticket must be claimed before it can be handed off.',
                             flags: MessageFlags.Ephemeral
                         });
                         return;
@@ -1861,6 +1886,71 @@ client.on(
                         flags: MessageFlags.Ephemeral
                     });
 
+                    const ownerMention =
+                        ownerId
+                            ? `<@${ownerId}>`
+                            : 'Customer';
+
+                    let message =
+                        `${ownerMention} | ` +
+                        'This ticket has been unclaimed. ' +
+                        'A support member will be with you shortly.';
+
+                    if (notes) {
+                        message +=
+                            '\n\n**Notes**\n' +
+                            notes
+                                .split('\n')
+                                .map(
+                                    line =>
+                                        `> ${line}`
+                                )
+                                .join('\n');
+                    }
+
+                    const container =
+                        new ContainerBuilder()
+                            .addTextDisplayComponents(
+                                new TextDisplayBuilder()
+                                    .setContent(message)
+                            );
+
+                    // Send the public unclaim notice immediately so it is not
+                    // delayed by Discord's channel-edit rate limit.
+                    void channel.send({
+                        components: [container],
+                        flags:
+                            MessageFlags.IsComponentsV2,
+                        allowedMentions: {
+                            users:
+                                ownerId
+                                    ? [ownerId]
+                                    : []
+                        }
+                    }).catch(async messageError => {
+                        console.error(
+                            '[UNCLAIM MESSAGE ERROR]',
+                            messageError
+                        );
+
+                        try {
+                            await channel.send({
+                                content: message,
+                                allowedMentions: {
+                                    users:
+                                        ownerId
+                                            ? [ownerId]
+                                            : []
+                                }
+                            });
+                        } catch (fallbackError) {
+                            console.error(
+                                '[UNCLAIM FALLBACK MESSAGE ERROR]',
+                                fallbackError
+                            );
+                        }
+                    });
+
                     void persistTicketChannelEdit(
                         channel,
                         {
@@ -1876,77 +1966,10 @@ client.on(
                             try {
                                 await interaction.followUp({
                                     content:
-                                        '❌ Discord could not finish unclaiming this ticket. Please try again.',
+                                        '❌ Discord could not finish updating the ticket channel after unclaiming it. Please try again.',
                                     flags: MessageFlags.Ephemeral
                                 });
                             } catch {}
-
-                            return;
-                        }
-
-                        const ownerMention =
-                            ownerId
-                                ? `<@${ownerId}>`
-                                : 'Customer';
-
-                        let message =
-                            `${ownerMention} | ` +
-                            'This ticket has been unclaimed. ' +
-                            'A support member will be with you shortly.';
-
-                        if (notes) {
-                            message +=
-                                '\n\n**Notes**\n' +
-                                notes
-                                    .split('\n')
-                                    .map(
-                                        line =>
-                                            `> ${line}`
-                                    )
-                                    .join('\n');
-                        }
-
-                        const container =
-                            new ContainerBuilder()
-                                .addTextDisplayComponents(
-                                    new TextDisplayBuilder()
-                                        .setContent(message)
-                                );
-
-                        try {
-                            await channel.send({
-                                components: [container],
-                                flags:
-                                    MessageFlags.IsComponentsV2,
-                                allowedMentions: {
-                                    users:
-                                        ownerId
-                                            ? [ownerId]
-                                            : []
-                                }
-                            });
-                        } catch (messageError) {
-                            console.error(
-                                '[UNCLAIM MESSAGE ERROR]',
-                                messageError
-                            );
-
-                            try {
-                                await channel.send({
-                                    content: message,
-                                    allowedMentions: {
-                                        users:
-                                            ownerId
-                                                ? [ownerId]
-                                                : []
-                                    }
-                                });
-                            } catch (fallbackError) {
-                                console.error(
-                                    '[UNCLAIM FALLBACK MESSAGE ERROR]',
-                                    fallbackError
-                                );
-                            }
                         }
                     });
 
@@ -2624,14 +2647,12 @@ client.on(
                     }
 
                     if (
-                        !isSupportMember(
-                            interaction.member
-                        )
+                        !isSenior
                     ) {
 
                         await interaction.reply({
                             content:
-                                '❌ Only a member of the MSRP support team can use this.',
+                                '❌ Only Senior Support Staff can close tickets.',
                             flags:
                                 MessageFlags.Ephemeral
                         });
@@ -2644,32 +2665,14 @@ client.on(
                             channel
                         );
 
-                    // Senior Support can close any ticket, claimed or unclaimed.
-                    // SS / R&A may only close a ticket they personally claimed.
+                    // Close is SSS-only, and the ticket must already be claimed.
                     if (
-                        !isSenior &&
                         !claimedBy
                     ) {
 
                         await interaction.reply({
                             content:
-                                '❌ You must claim this ticket before you can close it.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-
-                        return;
-                    }
-
-                    if (
-                        !isSenior &&
-                        claimedBy !==
-                        interaction.user.id
-                    ) {
-
-                        await interaction.reply({
-                            content:
-                                '❌ You can only close tickets that you have claimed.',
+                                '❌ This ticket must be claimed before it can be closed.',
                             flags:
                                 MessageFlags.Ephemeral
                         });
@@ -2816,13 +2819,11 @@ client.on(
                     }
 
                     if (
-                        !isSupportMember(
-                            interaction.member
-                        )
+                        !isSenior
                     ) {
                         await interaction.reply({
                             content:
-                                '❌ Only a member of the MSRP support team can use this.',
+                                '❌ Only Senior Support Staff can hand off tickets.',
                             flags:
                                 MessageFlags.Ephemeral
                         });
@@ -2830,26 +2831,11 @@ client.on(
                     }
 
                     if (
-                        !isSenior &&
                         !claimedBy
                     ) {
                         await interaction.reply({
                             content:
-                                '❌ You must claim this ticket before you can hand it off.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    if (
-                        !isSenior &&
-                        claimedBy !==
-                        interaction.user.id
-                    ) {
-                        await interaction.reply({
-                            content:
-                                '❌ You can only hand off tickets that you have claimed.',
+                                '❌ This ticket must be claimed before it can be handed off.',
                             flags:
                                 MessageFlags.Ephemeral
                         });
