@@ -39,6 +39,7 @@ const ticketSetup = require('./tickets/ticketSetup');
 const { createTicket } = require('./tickets/ticketCreate');
 
 const config = require('./tickets/ticketConfig');
+const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
 
 
 
@@ -99,7 +100,6 @@ const client = new Client({
 
 
 const activeClaimChannels = new Set();
-const activeHandoffChannels = new Set();
 
 const CLOSE_LOG_CHANNEL_ID = '1556842177743556718';
 const optimisticClaimStates = new Map();
@@ -898,6 +898,126 @@ async function sendTicketActionMessage(
     return null;
 }
 
+
+const claimTitleReconcileTimers = new Map();
+
+function syncTicketStateAfterHandoff(channel, updates = {}) {
+    if (!channel) return;
+
+    const channelId = channel.id;
+    const nextVersion =
+        (ticketChannelEditVersions.get(channelId) || 0) + 1;
+
+    // Invalidate any older queued Claim/Unclaim edit so it cannot become the
+    // main script's source of truth after the handoff.
+    ticketChannelEditVersions.set(channelId, nextVersion);
+    ticketChannelEditPending.delete(channelId);
+    ticketChannelEditRetryCounts.delete(channelId);
+
+    optimisticClaimStates.set(channelId, null);
+
+    if (updates.departmentKey) {
+        optimisticDepartmentStates.set(
+            channelId,
+            updates.departmentKey
+        );
+    }
+
+    if (updates.name) {
+        optimisticChannelNames.set(
+            channelId,
+            updates.name
+        );
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'topic')) {
+        optimisticChannelTopics.set(
+            channelId,
+            updates.topic || ''
+        );
+    }
+}
+
+function scheduleClaimTitleReconciliation(channel) {
+    if (!channel) return;
+
+    const channelId = channel.id;
+    const existingTimers =
+        claimTitleReconcileTimers.get(channelId) || [];
+
+    for (const timer of existingTimers) {
+        clearTimeout(timer);
+    }
+
+    const timers = [];
+
+    // Discord can finish an older Unclaim rename after the new Claim has
+    // already succeeded. Re-check the real channel name a few times and make
+    // the latest claim win visually as well as logically.
+    const delays = [150, 1800, 7000, 25000, 75000];
+
+    for (const delay of delays) {
+        const timer = setTimeout(async () => {
+            try {
+                const claimedBy = getClaimedUserId(channel);
+
+                if (!claimedBy) {
+                    return;
+                }
+
+                let latestChannel = channel;
+
+                try {
+                    latestChannel =
+                        await channel.fetch();
+                } catch {}
+
+                const currentName =
+                    latestChannel.name ||
+                    channel.name ||
+                    getEffectiveChannelName(channel);
+
+                const desiredName =
+                    `claimed-${stripClaimedPrefix(currentName)}`;
+
+                if (
+                    String(currentName).toLowerCase() ===
+                    desiredName.toLowerCase()
+                ) {
+                    optimisticChannelNames.set(
+                        channelId,
+                        desiredName
+                    );
+                    return;
+                }
+
+                const renamed =
+                    await latestChannel.setName(
+                        desiredName,
+                        'Synchronise claimed ticket title'
+                    );
+
+                optimisticChannelNames.set(
+                    channelId,
+                    renamed.name || desiredName
+                );
+            } catch (error) {
+                console.error(
+                    '[CLAIM TITLE RECONCILE ERROR]',
+                    error
+                );
+            }
+        }, delay);
+
+        timers.push(timer);
+    }
+
+    claimTitleReconcileTimers.set(
+        channelId,
+        timers
+    );
+}
+
 async function fetchAllTicketMessages(channel) {
     const messages = [];
     let before = null;
@@ -1258,6 +1378,24 @@ client.on(
 
             }
 
+
+
+            // ==================================================
+            // HAND OFF MODULE
+            // ==================================================
+
+            if (
+                await handleTicketHandoffInteraction(
+                    interaction,
+                    {
+                        getClaimedUserId,
+                        syncAfterHandoff:
+                            syncTicketStateAfterHandoff
+                    }
+                )
+            ) {
+                return;
+            }
 
 
             // ==================================================
@@ -1738,397 +1876,7 @@ client.on(
                         } catch {}
                     }
 
-                      // ==================================================
-
-                // HAND OFF MODAL
-
-                // ==================================================
-
-                if (
-                    interaction.customId ===
-                    'ticket_handoff_modal'
-                ) {
-                    const channel = interaction.channel;
-
-                    if (!channel || !channel.isTextBased()) {
-                        await interaction.reply({
-                            content:
-                                '❌ This ticket channel could not be found.',
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    const ownerId =
-                        getTicketOwnerId(channel);
-
-                    if (
-                        ownerId === interaction.user.id &&
-                        !isTicketOwnerStaffTestingAllowed(
-                            interaction.member,
-                            ownerId,
-                            interaction.user.id
-                        )
-                    ) {
-                        await interaction.reply({
-                            content:
-                                '❌ The user who created the ticket cannot use staff ticket buttons.',
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    // Acknowledge the modal immediately so Discord never
-                    // reports "interaction failed" while the category move runs.
-                    try {
-                        await interaction.deferReply({
-                            flags: MessageFlags.Ephemeral
-                        });
-                    } catch (error) {
-                        console.error(
-                            '[HANDOFF DEFER ERROR]',
-                            error
-                        );
-                        return;
-                    }
-
-                    const handoffPermission =
-                        getTicketActionPermission(
-                            interaction.member,
-                            channel,
-                            'handoff',
-                            interaction.user.id
-                        );
-
-                    if (!handoffPermission.allowed) {
-                        await interaction.editReply({
-                            content:
-                                handoffPermission.message
-                        });
-                        return;
-                    }
-
-                    if (
-                        activeHandoffChannels.has(
-                            channel.id
-                        )
-                    ) {
-                        await interaction.editReply({
-                            content:
-                                '❌ A hand off is already being processed for this ticket.'
-                        });
-                        return;
-                    }
-
-                    const selected =
-                        interaction.fields
-                            .getStringSelectValues(
-                                'handoff_destination'
-                            )?.[0];
-
-                    const requestedName =
-                        interaction.fields
-                            .getTextInputValue(
-                                'handoff_name'
-                            )
-                            .trim();
-
-                    let notes = '';
-
-                    try {
-                        notes =
-                            interaction.fields
-                                .getTextInputValue(
-                                    'handoff_notes'
-                                )
-                                ?.trim() || '';
-                    } catch {}
-
-                    if (!selected) {
-                        await interaction.editReply({
-                            content:
-                                '❌ Please select a hand off destination.'
-                        });
-                        return;
-                    }
-
-                    if (!requestedName) {
-                        await interaction.editReply({
-                            content:
-                                '❌ Please enter a name for this ticket.'
-                        });
-                        return;
-                    }
-
-                    const destination =
-                        getTicketDepartmentFromKey(
-                            selected
-                        );
-
-                    if (!destination) {
-                        await interaction.editReply({
-                            content:
-                                '❌ Invalid hand off destination.'
-                        });
-                        return;
-                    }
-
-                    // Always use the real Discord parent for handoff decisions.
-                    const currentDepartment =
-                        getTicketDepartmentFromParentId(
-                            channel.parentId
-                        );
-
-                    if (
-                        currentDepartment?.key ===
-                        destination.key
-                    ) {
-                        await interaction.editReply({
-                            content:
-                                '❌ This ticket is already in that department. Reopen Hand Off and choose another department.'
-                        });
-                        return;
-                    }
-
-                    const newName =
-                        buildHandoffChannelName(
-                            channel,
-                            ownerId,
-                            requestedName
-                        );
-
-                    if (!newName) {
-                        await interaction.editReply({
-                            content:
-                                '❌ That ticket name could not be used. Please try a different name.'
-                        });
-                        return;
-                    }
-
-                    activeHandoffChannels.add(
-                        channel.id
-                    );
-
-                    // The interaction is now safely acknowledged. The user no
-                    // longer has to stare at Discord's native "thinking" state.
-                    await interaction.editReply({
-                        content:
-                            `⏳ Hand off accepted. Moving ticket to ${destination.name}...`
-                    });
-
-                    void (async () => {
-                        let movedChannel = null;
-
-                        try {
-                            // CATEGORY MOVE IS THE ONLY CRITICAL HANDOFF STEP.
-                            // Do not bundle it with rename/topic work because
-                            // channel-name rate limits can otherwise block the move.
-                            let lastMoveError = null;
-
-                            for (
-                                let attempt = 1;
-                                attempt <= 3;
-                                attempt += 1
-                            ) {
-                                try {
-                                    movedChannel =
-                                        await channel.setParent(
-                                            destination.categoryId,
-                                            {
-                                                lockPermissions: false,
-                                                reason:
-                                                    `Ticket handed off by ${interaction.user.tag}`
-                                            }
-                                        );
-
-                                    lastMoveError = null;
-                                    break;
-                                } catch (error) {
-                                    lastMoveError = error;
-                                    console.error(
-                                        `[HANDOFF MOVE ERROR - ATTEMPT ${attempt}]`,
-                                        error
-                                    );
-
-                                    if (attempt < 3) {
-                                        await new Promise(
-                                            resolve =>
-                                                setTimeout(
-                                                    resolve,
-                                                    750 * attempt
-                                                )
-                                        );
-                                    }
-                                }
-                            }
-
-                            if (!movedChannel) {
-                                try {
-                                    await interaction.editReply({
-                                        content:
-                                            '❌ Discord could not move this ticket to the new department. The ticket has not been unclaimed or renamed.'
-                                    });
-                                } catch {}
-
-                                console.error(
-                                    '[HANDOFF CATEGORY MOVE FAILED]',
-                                    lastMoveError
-                                );
-                                return;
-                            }
-
-                            // A successful setParent() is authoritative. Do not
-                            // immediately refetch and risk reading stale parent data.
-                            const existingTopic =
-                                String(
-                                    getEffectiveChannelTopic(
-                                        channel
-                                    ) || ''
-                                );
-
-                            const newTopic =
-                                existingTopic.replace(
-                                    /(?:^|\|)claimed-by:\d+/g,
-                                    ''
-                                );
-
-                            const version =
-                                applyOptimisticTicketState(
-                                    movedChannel,
-                                    {
-                                        claimedBy: null,
-                                        departmentKey:
-                                            destination.key,
-                                        name: newName,
-                                        topic: newTopic
-                                    }
-                                );
-
-                            // Report the successful department move immediately.
-                            try {
-                                await interaction.editReply({
-                                    content:
-                                        `✅ Ticket handed off to ${destination.name}.`
-                                });
-                            } catch (error) {
-                                console.error(
-                                    '[HANDOFF SUCCESS REPLY ERROR]',
-                                    error
-                                );
-                            }
-
-                            const ownerMention =
-                                ownerId
-                                    ? `<@${ownerId}>`
-                                    : 'Customer';
-
-                            const destinationRoleMention =
-                                destination.roleId
-                                    ? `<@&${destination.roleId}>`
-                                    : destination.name;
-
-                            let message =
-                                `${ownerMention} ${destinationRoleMention}\n\n` +
-                                `**This ticket has been handed to ${destination.name}.**\n` +
-                                'The ticket has been unclaimed for the new department. ' +
-                                'A support member will be with you shortly.';
-
-                            if (notes) {
-                                message +=
-                                    '\n\n**Notes from previous staff member**\n' +
-                                    notes
-                                        .split('\n')
-                                        .map(
-                                            line =>
-                                                `> ${line}`
-                                        )
-                                        .join('\n');
-                            }
-
-                            // Notification failure must NEVER turn a successful
-                            // handoff into "something went wrong".
-                            try {
-                                const handoffMessage =
-                                    await sendTicketActionMessage(
-                                        movedChannel,
-                                        message,
-                                        {
-                                            users:
-                                                ownerId
-                                                    ? [ownerId]
-                                                    : [],
-                                            roles:
-                                                destination.roleId
-                                                    ? [destination.roleId]
-                                                    : []
-                                        },
-                                        'HANDOFF'
-                                    );
-
-                                if (!handoffMessage) {
-                                    console.error(
-                                        '[HANDOFF MESSAGE FAILED] No message was returned.'
-                                    );
-                                }
-                            } catch (error) {
-                                console.error(
-                                    '[HANDOFF MESSAGE FATAL ERROR]',
-                                    error
-                                );
-                            }
-
-                            // Persist the unclaimed topic + requested ticket name
-                            // separately. If Discord delays a rename, the actual
-                            // department move and handoff notification still stand.
-                            try {
-                                void persistTicketChannelEdit(
-                                    movedChannel,
-                                    {
-                                        name: newName,
-                                        topic: newTopic,
-                                        reason:
-                                            `Ticket handoff state updated by ${interaction.user.tag}`
-                                    },
-                                    version,
-                                    'HANDOFF STATE'
-                                );
-                            } catch (error) {
-                                console.error(
-                                    '[HANDOFF STATE QUEUE ERROR]',
-                                    error
-                                );
-                            }
-
-                        } catch (error) {
-                            console.error(
-                                '[HANDOFF UNEXPECTED ERROR]',
-                                error
-                            );
-
-                            // Only show a generic failure when the category move
-                            // itself never succeeded. Post-move notification/title
-                            // errors are logged instead of lying to the user.
-                            if (!movedChannel) {
-                                try {
-                                    await interaction.editReply({
-                                        content:
-                                            '❌ Something went wrong while moving this ticket. Please try again.'
-                                    });
-                                } catch {}
-                            }
-                        } finally {
-                            activeHandoffChannels.delete(
-                                channel.id
-                            );
-                        }
-                    })();
-
                     return;
-                }
-
-
-
-              return;
                 }
 
                 // ==================================================
@@ -2801,6 +2549,10 @@ client.on(
                                 }
                             );
 
+                        scheduleClaimTitleReconciliation(
+                            channel
+                        );
+
                         await interaction.editReply({
                             content: isTakeover
                                 ? '✅ Ticket taken over successfully.'
@@ -3051,225 +2803,6 @@ client.on(
                 }
 
 
-
-                // ==================================================
-
-                // HAND OFF
-
-                // ==================================================
-
-                if (
-                    interaction.customId ===
-                    'ticket_handoff'
-                ) {
-                    const channel =
-                        interaction.channel;
-
-                    if (
-                        !channel ||
-                        !channel.isTextBased()
-                    ) {
-                        await interaction.reply({
-                            content:
-                                '❌ This ticket channel could not be found.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    const ownerId =
-                        getTicketOwnerId(channel);
-
-                    if (
-                        ownerId === interaction.user.id &&
-                        !isTicketOwnerStaffTestingAllowed(
-                            interaction.member,
-                            ownerId,
-                            interaction.user.id
-                        )
-                    ) {
-                        await interaction.reply({
-                            content:
-                                '❌ The user who created the ticket cannot use staff ticket buttons.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    const handoffPermission =
-                        getTicketActionPermission(
-                            interaction.member,
-                            channel,
-                            'handoff',
-                            interaction.user.id
-                        );
-
-                    if (!handoffPermission.allowed) {
-                        await interaction.reply({
-                            content: handoffPermission.message,
-                            flags: MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    const currentDepartment =
-                        getTicketDepartment(channel) ||
-                        getTicketDepartmentFromParentId(
-                            channel.parentId
-                        );
-
-                    const allDestinations = [
-                        getTicketDepartmentFromKey(
-                            'support'
-                        ),
-                        getTicketDepartmentFromKey(
-                            'senior'
-                        ),
-                        getTicketDepartmentFromKey(
-                            'reports_appeals'
-                        )
-                    ].filter(Boolean);
-
-                    const destinationOptions =
-                        allDestinations
-                            .filter(
-                                destination =>
-                                    destination.key !==
-                                    currentDepartment?.key
-                            )
-                            .map(
-                                destination =>
-                                    new StringSelectMenuOptionBuilder()
-                                        .setLabel(
-                                            destination.name
-                                        )
-                                        .setValue(
-                                            destination.key
-                                        )
-                            );
-
-                    if (
-                        destinationOptions.length === 0
-                    ) {
-                        await interaction.reply({
-                            content:
-                                '❌ No other ticket departments are available.',
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                        return;
-                    }
-
-                    const modal =
-                        new ModalBuilder()
-                            .setCustomId(
-                                'ticket_handoff_modal'
-                            )
-                            .setTitle(
-                                'Hand Off Ticket'
-                            );
-
-                    const select =
-                        new StringSelectMenuBuilder()
-                            .setCustomId(
-                                'handoff_destination'
-                            )
-                            .setPlaceholder(
-                                'Select a destination...'
-                            )
-                            .setMinValues(1)
-                            .setMaxValues(1)
-                            .addOptions(
-                                destinationOptions
-                            );
-
-                    modal.addLabelComponents(
-                        new LabelBuilder()
-                            .setLabel(
-                                'Where would you like to hand this to?'
-                            )
-                            .setStringSelectMenuComponent(
-                                select
-                            )
-                    );
-
-                    const ticketName =
-                        new TextInputBuilder()
-                            .setCustomId(
-                                'handoff_name'
-                            )
-                            .setStyle(
-                                TextInputStyle.Short
-                            )
-                            .setRequired(true)
-                            .setPlaceholder(
-                                'Example: Claiming giveaway prize'
-                            )
-                            .setMaxLength(90);
-
-                    modal.addLabelComponents(
-                        new LabelBuilder()
-                            .setLabel(
-                                'Please name this ticket'
-                            )
-                            .setTextInputComponent(
-                                ticketName
-                            )
-                    );
-
-                    const notes =
-                        new TextInputBuilder()
-                            .setCustomId(
-                                'handoff_notes'
-                            )
-                            .setStyle(
-                                TextInputStyle.Paragraph
-                            )
-                            .setRequired(false)
-                            .setPlaceholder(
-                                'Add any useful notes for the next support member...'
-                            )
-                            .setMaxLength(1000);
-
-                    modal.addLabelComponents(
-                        new LabelBuilder()
-                            .setLabel(
-                                'Notes (Optional)'
-                            )
-                            .setTextInputComponent(
-                                notes
-                            )
-                    );
-
-                    try {
-                        await interaction.showModal(
-                            modal
-                        );
-                    } catch (error) {
-                        console.error(
-                            '[HANDOFF BUTTON ERROR]',
-                            error
-                        );
-
-                        if (
-                            !interaction.replied &&
-                            !interaction.deferred
-                        ) {
-                            try {
-                                await interaction.reply({
-                                    content:
-                                        '❌ Discord could not open the hand off form.',
-                                    flags:
-                                        MessageFlags.Ephemeral
-                                });
-                            } catch {}
-                        }
-                    }
-
-                    return;
-                }
 
                 // ==================================================
 
