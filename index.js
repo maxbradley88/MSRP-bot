@@ -2734,12 +2734,40 @@ await interaction.editReply({
          * in the SAME request.
          */
         const updatedChannel =
-            await freshChannel.edit({
-                name: claimedName,
-                topic: claimedTopic,
-                reason:
-                    `Ticket claimed by ${interaction.user.tag}`
-            });
+// Save the claim immediately in our local state.
+ticketState.forgetTicket(freshChannel.id);
+
+// Tell the user the claim succeeded NOW.
+// Do not wait for Discord's slow channel rename queue.
+await interaction.editReply({
+    content:
+        isTakeover
+            ? '✅ Ticket taken over successfully.'
+            : '✅ Ticket claimed.'
+});
+
+// Update the channel name/topic separately.
+freshChannel.edit({
+    name: claimedName,
+    topic: claimedTopic,
+    reason:
+        `Ticket claimed by ${interaction.user.tag}`
+})
+.then(updatedChannel => {
+    console.log(
+        `[CLAIM RENAME SUCCESS] ${updatedChannel.name}`
+    );
+
+    ticketState.forgetTicket(
+        updatedChannel.id
+    );
+})
+.catch(error => {
+    console.error(
+        '[CLAIM RENAME ERROR]',
+        error
+    );
+});
 
         /*
          * Clear any remembered old state AGAIN
@@ -2755,12 +2783,7 @@ await interaction.editReply({
             );
         }
 
-        await interaction.editReply({
-            content:
-                isTakeover
-                    ? '✅ Ticket taken over successfully.'
-                    : '✅ Ticket claimed.'
-        });
+
 
         /*
          * ALWAYS send a Claim message.
