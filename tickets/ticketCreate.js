@@ -15,6 +15,7 @@ const {
 } = require('discord.js');
 
 const config = require('./ticketConfig');
+const ticketStatus = require('./ticketStatus');
 
 const {
     setupTicketIcons,
@@ -258,7 +259,7 @@ async function createTicket(
                 new ButtonBuilder()
                     .setCustomId('ticket_handoff')
                     .setLabel('Hand Off')
-                    .setStyle(ButtonStyle.Secondary)
+                    .setStyle(ButtonStyle.Primary)
                     .setEmoji(handoffEmoji || undefined),
 
                 new ButtonBuilder()
@@ -320,7 +321,7 @@ async function createTicket(
                 ticketButtons
             );
 
-    await ticketChannel.send({
+    const ticketMessage = await ticketChannel.send({
         components: [welcomeContainer],
         files: [
             {
@@ -344,6 +345,22 @@ async function createTicket(
         ],
         flags: MessageFlags.IsComponentsV2
     });
+
+    ticketStatus.rememberTicketMessage(
+        ticketChannel.id,
+        ticketMessage.id
+    );
+
+    try {
+        await ticketMessage.pin(
+            'Pin MSRP ticket control container'
+        );
+    } catch (error) {
+        console.error(
+            '[TICKET CREATE PIN ERROR]',
+            error
+        );
+    }
 }
 
 module.exports = {

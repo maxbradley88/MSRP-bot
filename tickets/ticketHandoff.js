@@ -12,6 +12,7 @@ const {
 
 const config = require('./ticketConfig');
 const ticketState = require('./ticketState');
+const ticketStatus = require('./ticketStatus');
 
 let testingOverrides = {
     allowTicketCreatorStaffActions: false
@@ -360,19 +361,6 @@ async function openHandoffModal(interaction) {
             .setStringSelectMenuComponent(select)
     );
 
-    const nameInput = new TextInputBuilder()
-        .setCustomId('handoff_name')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setPlaceholder('Example: Claiming giveaway prize')
-        .setMaxLength(90);
-
-    modal.addLabelComponents(
-        new LabelBuilder()
-            .setLabel('Please name this ticket')
-            .setTextInputComponent(nameInput)
-    );
-
     const notesInput = new TextInputBuilder()
         .setCustomId('handoff_notes')
         .setStyle(TextInputStyle.Paragraph)
@@ -423,10 +411,6 @@ async function submitHandoff(interaction) {
     const selected = interaction.fields
         .getStringSelectValues('handoff_destination')?.[0];
 
-    const requestedName = interaction.fields
-        .getTextInputValue('handoff_name')
-        .trim();
-
     let notes = '';
     try {
         notes = interaction.fields
@@ -447,19 +431,6 @@ async function submitHandoff(interaction) {
     if (destination.key === currentDepartment?.key) {
         await interaction.editReply({
             content: '❌ This ticket is already in that department.'
-        });
-        return;
-    }
-
-    const newName = await buildHandoffName(
-        channel,
-        permission.ownerId,
-        requestedName
-    );
-
-    if (!newName) {
-        await interaction.editReply({
-            content: '❌ Please enter a valid ticket name.'
         });
         return;
     }
@@ -487,12 +458,24 @@ async function submitHandoff(interaction) {
         // requested rename. Any older Claim/Unclaim state is superseded here.
         ticketState.handoffTicketState(
             movedChannel,
-            newName,
+            null,
             {
                 reason: `Ticket handed off by ${interaction.user.tag}`,
-                delay: 100
+                delay: 0
             }
         );
+
+        try {
+            await ticketStatus.setClaimButtonState(
+                movedChannel,
+                false
+            );
+        } catch (statusError) {
+            console.error(
+                '[HANDOFF BUTTON STATUS ERROR]',
+                statusError
+            );
+        }
 
         await interaction.editReply({
             content: `✅ Ticket handed off to ${destination.name}.`

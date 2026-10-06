@@ -41,6 +41,7 @@ const { createTicket } = require('./tickets/ticketCreate');
 const config = require('./tickets/ticketConfig');
 const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
 const ticketState = require('./tickets/ticketState');
+const ticketStatus = require('./tickets/ticketStatus');
 
 
 
@@ -2054,9 +2055,18 @@ client.on(
                         {
                             reason:
                                 `Ticket unclaimed by ${interaction.user.tag}`,
-                            delay: 250
+                            delay: 0
                         }
                     );
+
+                    void ticketStatus
+                        .setClaimButtonState(channel, false)
+                        .catch(error => {
+                            console.error(
+                                '[UNCLAIM BUTTON STATUS ERROR]',
+                                error
+                            );
+                        });
 
                     await interaction.reply({
                         content:
@@ -2610,6 +2620,15 @@ if (
                 delay: 0
             }
         );
+
+        void ticketStatus
+            .setClaimButtonState(channel, true)
+            .catch(error => {
+                console.error(
+                    '[CLAIM BUTTON STATUS ERROR]',
+                    error
+                );
+            });
 
         await interaction.editReply({
             content:

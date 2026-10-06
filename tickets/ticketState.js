@@ -97,125 +97,72 @@ async function runSyncWorker(channel) {
     const worker = (async () => {
         while (true) {
             const desired = desiredStates.get(channelId);
-
-            if (!desired) {
-                return;
-            }
+            if (!desired) return;
 
             const targetVersion = desired.version;
-
-            const targetName = String(
-                desired.name || channel.name || ''
-            ).slice(0, 100);
-
-            const targetTopic = String(
-                desired.topic ?? channel.topic ?? ''
-            );
+            const targetName = String(desired.name || channel.name || '').slice(0, 100);
+            const targetTopic = String(desired.topic ?? channel.topic ?? '');
 
             const actualName = String(channel.name || '');
             const actualTopic = String(channel.topic || '');
 
             if (
-                actualName.toLowerCase() ===
-                    targetName.toLowerCase() &&
+                actualName.toLowerCase() === targetName.toLowerCase() &&
                 actualTopic === targetTopic
             ) {
-                if (
-                    desiredStates.get(channelId)?.version ===
-                    targetVersion
-                ) {
+                if (desiredStates.get(channelId)?.version === targetVersion) {
                     return;
                 }
-
                 continue;
             }
 
+            let updatedChannel;
+
             try {
-                const updatedChannel =
-                    await channel.edit({
-                        name: targetName,
-                        topic: targetTopic,
-                        reason:
-                            desired.reason ||
-                            'Ticket state sync'
-                    });
-
-                if (updatedChannel) {
-                    channel = updatedChannel;
-                }
+                updatedChannel = await channel.edit({
+                    name: targetName,
+                    topic: targetTopic,
+                    reason: desired.reason || 'Ticket state sync'
+                });
             } catch (error) {
-                /*
-                 * Discord error 10003 = Unknown Channel.
-                 *
-                 * The ticket has been deleted.
-                 * NEVER retry it again.
-                 */
-                if (
-                    error?.code === 10003 ||
-                    error?.rawError?.code === 10003
-                ) {
-                    console.log(
-                        `[TICKET STATE] Forgetting deleted channel ${channelId}`
-                    );
+                console.error('[TICKET STATE SYNC ERROR]', error);
 
-                    forgetTicket(channelId);
-                    return;
-                }
-
-                console.error(
-                    '[TICKET STATE SYNC ERROR]',
-                    error
-                );
-
-                /*
-                 * Retry actual temporary Discord errors.
-                 */
+                // Keep the desired state. A transient Discord/API failure must
+                // never make the bot forget whether this ticket is claimed.
+                // Retry later, but only one retry chain exists per ticket.
                 setTimeout(() => {
-                    if (
-                        desiredStates.has(channelId) &&
-                        !syncWorkers.has(channelId)
-                    ) {
+                    if (!syncWorkers.has(channelId)) {
                         void runSyncWorker(channel);
                     }
                 }, 3000);
-
                 return;
             }
 
-            const latest =
-                desiredStates.get(channelId);
+            const latest = desiredStates.get(channelId);
 
-            if (
-                !latest ||
-                latest.version === targetVersion
-            ) {
+            // Update the same channel object where possible so every other
+            // handler immediately sees the confirmed Discord state.
+            if (updatedChannel) {
+                channel = updatedChannel;
+            }
+
+            // If another Claim/Unclaim/Handoff happened while Discord was
+            // processing this edit, loop again and apply ONLY the latest state.
+            if (!latest || latest.version === targetVersion) {
                 return;
             }
         }
     })().finally(() => {
         syncWorkers.delete(channelId);
 
-        /*
-         * IMPORTANT:
-         * If the ticket was deleted/forgotten,
-         * DO NOT recreate another sync timer.
-         */
-        const desired =
-            desiredStates.get(channelId);
-
-        if (!desired) {
-            return;
-        }
+        const desired = desiredStates.get(channelId);
+        if (!desired) return;
 
         const nameMatches =
-            String(channel.name || '')
-                .toLowerCase() ===
-            String(desired.name || '')
-                .toLowerCase();
-
+            String(channel.name || '').toLowerCase() ===
+            String(desired.name || '').toLowerCase();
         const topicMatches =
-            String(channel.topic || '') ===
-            String(desired.topic || '');
+            String(channel.topic || '') === String(desired.topic || '');
 
         if (!nameMatches || !topicMatches) {
             scheduleSync(channel, 250);
@@ -223,154 +170,26 @@ async function runSyncWorker(channel) {
     });
 
     syncWorkers.set(channelId, worker);
-
     return worker;
 }
 
 function claimTicket(channel, userId, options = {}) {
     const current = getDesiredState(channel);
 
-    const cleanName =
-        stripClaimedPrefix(
-            current.name || channel.name
-        );
-
-    const claimedName =
-        `claimed-${cleanName}`.slice(0, 100);
-
-    const claimedTopic =
-        setClaimedBy(
-            current.topic || channel.topic,
-            userId
-        );
-
-    const nextState =
-        updateDesiredState(
-            channel,
-            {
-                claimedBy: userId,
-                name: claimedName,
-                topic: claimedTopic
-            },
-            {
-                reason:
-                    options.reason ||
-                    `Ticket claimed by ${userId}`,
-                delay: 0
-            }
-        );
-
-    /*
-     * FORCE the real Discord channel name as well.
-     *
-     * This runs separately from the normal state worker,
-     * so Claim -> Unclaim -> Claim will always try to put
-     * "claimed-" back onto the actual channel.
-     */
-    setTimeout(async () => {
-        try {
-            /*
-             * If another action happened after this Claim
-             * (for example Unclaim), cancel this old rename.
-             */
-            const latestBeforeFetch =
-                desiredStates.get(channel.id);
-
-            if (
-                !latestBeforeFetch ||
-                latestBeforeFetch.version !==
-                    nextState.version ||
-                latestBeforeFetch.claimedBy !==
-                    userId
-            ) {
-                return;
-            }
-
-            const freshChannel =
-                await channel.guild.channels.fetch(
-                    channel.id,
-                    {
-                        force: true
-                    }
-                );
-
-            if (!freshChannel) {
-                return;
-            }
-
-            /*
-             * Check again after fetching because another
-             * action may have happened while Discord was
-             * responding.
-             */
-            const latest =
-                desiredStates.get(channel.id);
-
-            if (
-                !latest ||
-                latest.version !==
-                    nextState.version ||
-                latest.claimedBy !==
-                    userId
-            ) {
-                return;
-            }
-
-            const freshBaseName =
-                stripClaimedPrefix(
-                    freshChannel.name
-                );
-
-            const forcedName =
-                `claimed-${freshBaseName}`
-                    .slice(0, 100);
-
-            const forcedTopic =
-                setClaimedBy(
-                    freshChannel.topic,
-                    userId
-                );
-
-            if (
-                freshChannel.name.toLowerCase() !==
-                    forcedName.toLowerCase() ||
-                String(freshChannel.topic || '') !==
-                    forcedTopic
-            ) {
-                const updatedChannel =
-                    await freshChannel.edit({
-                        name: forcedName,
-                        topic: forcedTopic,
-                        reason:
-                            options.reason ||
-                            `Ticket claimed by ${userId}`
-                    });
-
-                console.log(
-                    `[CLAIM TITLE FORCED] ${updatedChannel.name}`
-                );
-            }
-
-        } catch (error) {
-            /*
-             * Deleted ticket — don't retry it.
-             */
-            if (
-                error?.code === 10003 ||
-                error?.rawError?.code === 10003
-            ) {
-                forgetTicket(channel.id);
-                return;
-            }
-
-            console.error(
-                '[CLAIM TITLE FORCE ERROR]',
-                error
-            );
+    return updateDesiredState(
+        channel,
+        {
+            claimedBy: userId,
+            // Claim status is displayed by the Claim button now.
+            // Never rename the Discord channel for Claim/Unclaim.
+            name: String(current.name || channel.name || '').slice(0, 100),
+            topic: setClaimedBy(current.topic || channel.topic, userId)
+        },
+        {
+            reason: options.reason || `Ticket claimed by ${userId}`,
+            delay: options.delay ?? 0
         }
-    }, 250);
-
-    return nextState;
+    );
 }
 
 function unclaimTicket(channel, options = {}) {
@@ -380,29 +199,30 @@ function unclaimTicket(channel, options = {}) {
         channel,
         {
             claimedBy: null,
-            name: stripClaimedPrefix(current.name || channel.name).slice(0, 100),
+            name: String(current.name || channel.name || '').slice(0, 100),
             topic: removeClaimedBy(current.topic || channel.topic)
         },
         {
             reason: options.reason || 'Ticket unclaimed',
-            delay: options.delay ?? 500
+            delay: options.delay ?? 0
         }
     );
 }
 
-function handoffTicketState(channel, newName, options = {}) {
+function handoffTicketState(channel, _newName, options = {}) {
     const current = getDesiredState(channel);
 
     return updateDesiredState(
         channel,
         {
             claimedBy: null,
-            name: stripClaimedPrefix(newName).slice(0, 100),
+            // Hand Off no longer renames the ticket.
+            name: String(current.name || channel.name || '').slice(0, 100),
             topic: removeClaimedBy(current.topic || channel.topic)
         },
         {
             reason: options.reason || 'Ticket handed off',
-            delay: options.delay ?? 250
+            delay: options.delay ?? 0
         }
     );
 }
