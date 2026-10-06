@@ -42,6 +42,44 @@ const config = require('./tickets/ticketConfig');
 
 
 
+let testingOverrides = {
+
+    allowTicketCreatorStaffActions: false
+
+};
+
+
+
+try {
+
+    testingOverrides = require(
+
+        './tickets/testingOverrides'
+
+    );
+
+} catch (error) {
+
+    if (
+
+        error?.code !== 'MODULE_NOT_FOUND'
+
+    ) {
+
+        console.warn(
+
+            '[TESTING OVERRIDES ERROR]',
+
+            error
+
+        );
+
+    }
+
+}
+
+
+
 const client = new Client({
 
     intents: [
@@ -109,6 +147,32 @@ function isSeniorSupportMember(member) {
     return member.roles.cache.has(
 
         config.seniorSupportStaffRoleId
+
+    );
+
+}
+
+
+
+function isTicketOwnerStaffTestingAllowed(
+
+    member,
+
+    ownerId,
+
+    userId
+
+) {
+
+    return (
+
+        ownerId === userId &&
+
+        testingOverrides
+
+            .allowTicketCreatorStaffActions === true &&
+
+        isSupportMember(member)
 
     );
 
@@ -728,6 +792,334 @@ client.on(
 
                 // ==================================================
 
+                // CLOSE MODAL
+
+                // ==================================================
+
+
+
+                if (
+
+                    interaction.customId ===
+
+                    'ticket_close_modal'
+
+                ) {
+
+
+
+                    const channel =
+
+                        interaction.channel;
+
+
+
+                    if (
+
+                        !channel ||
+
+                        !channel.isTextBased()
+
+                    ) {
+
+                        await interaction.reply({
+
+                            content:
+
+                                '❌ This ticket channel could not be found.',
+
+                            flags:
+
+                                MessageFlags.Ephemeral
+
+                        });
+
+
+
+                        return;
+
+                    }
+
+
+
+                    const ownerId =
+
+                        getTicketOwnerId(
+
+                            channel
+
+                        );
+
+
+
+                    const isSenior =
+
+                        isSeniorSupportMember(
+
+                            interaction.member
+
+                        );
+
+
+
+                    if (
+
+                        ownerId ===
+
+                        interaction.user.id &&
+
+                        !isTicketOwnerStaffTestingAllowed(
+
+                            interaction.member,
+
+                            ownerId,
+
+                            interaction.user.id
+
+                        )
+
+                    ) {
+
+                        await interaction.reply({
+
+                            content:
+
+                                '❌ The user who created the ticket cannot use staff ticket buttons.',
+
+                            flags:
+
+                                MessageFlags.Ephemeral
+
+                        });
+
+
+
+                        return;
+
+                    }
+
+
+
+                    if (
+
+                        !isSupportMember(
+
+                            interaction.member
+
+                        )
+
+                    ) {
+
+                        await interaction.reply({
+
+                            content:
+
+                                '❌ Only a member of the MSRP support team can use this.',
+
+                            flags:
+
+                                MessageFlags.Ephemeral
+
+                        });
+
+
+
+                        return;
+
+                    }
+
+
+
+                    const claimedBy =
+
+                        getClaimedUserId(
+
+                            channel
+
+                        );
+
+
+
+                    if (
+
+                        !isSenior &&
+
+                        !claimedBy
+
+                    ) {
+
+                        await interaction.reply({
+
+                            content:
+
+                                '❌ You must claim this ticket before you can close it.',
+
+                            flags:
+
+                                MessageFlags.Ephemeral
+
+                        });
+
+
+
+                        return;
+
+                    }
+
+
+
+                    if (
+
+                        !isSenior &&
+
+                        claimedBy !==
+
+                        interaction.user.id
+
+                    ) {
+
+                        await interaction.reply({
+
+                            content:
+
+                                '❌ You can only close tickets that you have claimed.',
+
+                            flags:
+
+                                MessageFlags.Ephemeral
+
+                        });
+
+
+
+                        return;
+
+                    }
+
+
+
+                    const reason =
+
+                        interaction.fields
+
+                            .getTextInputValue(
+
+                                'close_reason'
+
+                            )
+
+                            .trim();
+
+
+
+                    if (!reason) {
+
+                        await interaction.reply({
+
+                            content:
+
+                                '❌ A reason for closing the ticket is required.',
+
+                            flags:
+
+                                MessageFlags.Ephemeral
+
+                        });
+
+
+
+                        return;
+
+                    }
+
+
+
+                    try {
+
+                        await interaction.reply({
+
+                            content:
+
+                                '✅ Closing ticket...',
+
+                            flags:
+
+                                MessageFlags.Ephemeral
+
+                        });
+
+
+
+                        const auditReason =
+
+                            (
+
+                                `MSRP ticket closed by ${interaction.user.username} ` +
+
+                                `(${interaction.user.id}): ${reason}`
+
+                            ).slice(0, 512);
+
+
+
+                        console.log(
+
+                            `[TICKET CLOSE] ${channel.name} | ` +
+
+                            `Closed by ${interaction.user.username} ` +
+
+                            `(${interaction.user.id}) | ` +
+
+                            `Reason: ${reason}`
+
+                        );
+
+
+
+                        await channel.delete(
+
+                            auditReason
+
+                        );
+
+
+
+                    } catch (error) {
+
+                        console.error(
+
+                            '[CLOSE MODAL ERROR]',
+
+                            error
+
+                        );
+
+
+
+                        try {
+
+                            await interaction.editReply({
+
+                                content:
+
+                                    '❌ Something went wrong while closing this ticket.'
+
+                            });
+
+                        } catch {}
+
+                    }
+
+
+
+                    return;
+
+                }
+
+
+
+                // ==================================================
+
                 // HAND OFF MODAL
 
                 // ==================================================
@@ -795,7 +1187,12 @@ client.on(
 
                     if (
                         ownerId ===
-                        interaction.user.id
+                        interaction.user.id &&
+                        !isTicketOwnerStaffTestingAllowed(
+                            interaction.member,
+                            ownerId,
+                            interaction.user.id
+                        )
                     ) {
 
                         await interaction.reply({
@@ -933,6 +1330,8 @@ client.on(
 
                         let destinationName;
 
+                        let destinationRoleId;
+
 
 
                         if (
@@ -956,6 +1355,12 @@ client.on(
                             destinationName =
 
                                 'Reports & Appeals Tickets';
+
+
+
+                            destinationRoleId =
+
+                                config.reportsAppealsRoleId;
 
 
 
@@ -983,6 +1388,12 @@ client.on(
 
 
 
+                            destinationRoleId =
+
+                                config.supportStaffRoleId;
+
+
+
                         } else if (
 
                             selected ===
@@ -1004,6 +1415,12 @@ client.on(
                             destinationName =
 
                                 'Senior Support Tickets';
+
+
+
+                            destinationRoleId =
+
+                                config.seniorSupportStaffRoleId;
 
 
 
@@ -1091,9 +1508,19 @@ client.on(
 
 
 
+                        const destinationRoleMention =
+
+                            destinationRoleId
+
+                                ? `<@&${destinationRoleId}>`
+
+                                : destinationName;
+
+
+
                         let message =
 
-                            `${ownerMention}\n\n` +
+                            `${ownerMention} ${destinationRoleMention}\n\n` +
 
                             `\*\*This ticket has been handed to ${destinationName}.\*\*\n` +
 
@@ -1164,6 +1591,14 @@ client.on(
                                     ownerId
 
                                         ? [ownerId]
+
+                                        : [],
+
+                                roles:
+
+                                    destinationRoleId
+
+                                        ? [destinationRoleId]
 
                                         : []
 
@@ -1666,7 +2101,12 @@ client.on(
 
                     if (
                         ownerId ===
-                        userId
+                        userId &&
+                        !isTicketOwnerStaffTestingAllowed(
+                            interaction.member,
+                            ownerId,
+                            userId
+                        )
                     ) {
 
 
@@ -2164,7 +2604,12 @@ client.on(
 
                     if (
                         ownerId ===
-                        interaction.user.id
+                        interaction.user.id &&
+                        !isTicketOwnerStaffTestingAllowed(
+                            interaction.member,
+                            ownerId,
+                            interaction.user.id
+                        )
                     ) {
 
                         await interaction.reply({
@@ -2233,35 +2678,79 @@ client.on(
 
 
 
-                    try {
+                    const modal =
+
+                        new ModalBuilder()
+
+                            .setCustomId(
+
+                                'ticket_close_modal'
+
+                            )
+
+                            .setTitle(
+
+                                'Close Ticket'
+
+                            );
 
 
 
-                        await interaction.deferUpdate();
+                    const reasonInput =
+
+                        new TextInputBuilder()
+
+                            .setCustomId(
+
+                                'close_reason'
+
+                            )
+
+                            .setStyle(
+
+                                TextInputStyle.Paragraph
+
+                            )
+
+                            .setRequired(true)
+
+                            .setMinLength(1)
+
+                            .setMaxLength(500)
+
+                            .setPlaceholder(
+
+                                'Enter the reason for closing this ticket...'
+
+                            );
 
 
 
-                        await channel.delete(
+                    modal.addLabelComponents(
 
-                            'MSRP ticket closed'
+                        new LabelBuilder()
 
-                        );
+                            .setLabel(
+
+                                'Reason for close'
+
+                            )
+
+                            .setTextInputComponent(
+
+                                reasonInput
+
+                            )
+
+                    );
 
 
 
-                    } catch (error) {
+                    await interaction.showModal(
 
+                        modal
 
-
-                        console.error(
-
-                            '[CLOSE ERROR]',
-
-                            error
-
-                        );
-
-                    }
+                    );
 
 
 
@@ -2342,7 +2831,12 @@ client.on(
 
                     if (
                         ownerId ===
-                        interaction.user.id
+                        interaction.user.id &&
+                        !isTicketOwnerStaffTestingAllowed(
+                            interaction.member,
+                            ownerId,
+                            interaction.user.id
+                        )
                     ) {
 
                         await interaction.reply({
