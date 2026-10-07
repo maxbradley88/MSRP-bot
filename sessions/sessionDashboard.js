@@ -10,12 +10,19 @@ const {
     SeparatorBuilder,
     SeparatorSpacingSize,
     TextDisplayBuilder,
-    ActionRowBuilder
+    ActionRowBuilder,
+    MessageFlags
 } = require('discord.js');
 
 const {
     getState
 } = require('./sessionState');
+
+const {
+    ensureSessionIcons,
+    buttonEmoji
+} = require('./sessionIcons');
+
 
 const STAFF_ROLE_ID =
     '1547535313096810546';
@@ -42,9 +49,6 @@ function divider() {
 }
 
 
-/*
- * Count members with the staff role.
- */
 function getStaffCount(guild) {
     if (!guild) {
         return 0;
@@ -60,30 +64,35 @@ function getStaffCount(guild) {
 }
 
 
-/*
- * Decorative button interaction IDs.
- *
- * These buttons don't actually perform an
- * action when clicked.
- */
-const DISPLAY_BUTTONS = [
-    'session_status',
-    'session_player_count',
-    'session_staff_count',
-    'session_queue_count'
-];
+function applyEmoji(
+    button,
+    emoji
+) {
+    const formatted =
+        buttonEmoji(emoji);
+
+    if (formatted) {
+        button.setEmoji(
+            formatted
+        );
+    }
+
+    return button;
+}
 
 
-/*
- * Builds the full Components V2 dashboard.
- */
-function buildSessionDashboard({
+async function buildSessionDashboard({
     guild,
     playerCount = 0,
     queueCount = 0
 }) {
     const state =
         getState();
+
+    const icons =
+        await ensureSessionIcons(
+            guild
+        );
 
     const staffCount =
         getStaffCount(guild);
@@ -93,16 +102,24 @@ function buildSessionDashboard({
             Date.now() / 1000
         );
 
-    /*
-     * We consider voting separate from an
-     * actually-active session.
-     */
     const isOnline =
         state.status === 'active' ||
         state.status === 'shutting-down';
 
     const isVoting =
         state.status === 'vote';
+
+
+    /*
+     * ==========================================
+     * ACTUAL SERVER LOGO EMOJI
+     * ==========================================
+     */
+
+    const logoEmoji =
+        icons.logo
+            ? icons.logo.toString()
+            : '';
 
 
     /*
@@ -120,7 +137,8 @@ function buildSessionDashboard({
                 'ticket-dashboard.png'
             ),
             {
-                name: 'session-dashboard.png'
+                name:
+                    'session-dashboard.png'
             }
         );
 
@@ -133,169 +151,210 @@ function buildSessionDashboard({
                 'image.png'
             ),
             {
-                name: 'session-footer.png'
+                name:
+                    'session-footer.png'
             }
         );
 
 
     /*
      * ==========================================
-     * TOP BUTTONS
+     * SESSION TIMES
      * ==========================================
      */
 
     const sessionTimesButton =
-        new ButtonBuilder()
-            .setCustomId(
-                'session_times'
-            )
-            .setLabel(
-                'Session Times'
-            )
-            .setEmoji('🕒')
-            .setStyle(
-                ButtonStyle.Secondary
-            );
-
-    const statusButton =
-        new ButtonBuilder()
-            .setCustomId(
-                'session_status'
-            )
-            .setLabel(
-                isOnline
-                    ? 'Online'
-                    : isVoting
-                        ? 'Voting'
-                        : 'Offline'
-            )
-            .setEmoji('📶')
-            .setStyle(
-                isOnline
-                    ? ButtonStyle.Success
-                    : isVoting
-                        ? ButtonStyle.Primary
-                        : ButtonStyle.Danger
-            );
+        applyEmoji(
+            new ButtonBuilder()
+                .setCustomId(
+                    'session_times'
+                )
+                .setLabel(
+                    'Session Times'
+                )
+                .setStyle(
+                    ButtonStyle.Secondary
+                ),
+            icons.sessionTimes
+        );
 
 
     /*
      * ==========================================
-     * INFORMATION BUTTONS
+     * ONLINE/OFFLINE STATUS
+     * ==========================================
+     */
+
+    const statusButton =
+        applyEmoji(
+            new ButtonBuilder()
+                .setCustomId(
+                    'session_status'
+                )
+                .setLabel(
+                    isOnline
+                        ? 'Online'
+                        : isVoting
+                            ? 'Voting'
+                            : 'Offline'
+                )
+                .setStyle(
+                    isOnline
+                        ? ButtonStyle.Success
+                        : isVoting
+                            ? ButtonStyle.Primary
+                            : ButtonStyle.Danger
+                )
+                .setDisabled(true),
+            icons.status
+        );
+
+
+    /*
+     * ==========================================
+     * PLAYER COUNT
      * ==========================================
      */
 
     const playerButton =
-        new ButtonBuilder()
-            .setCustomId(
-                'session_player_count'
-            )
-            .setLabel(
-                `Player count: ${playerCount}/50`
-            )
-            .setEmoji('👤')
-            .setStyle(
-                ButtonStyle.Secondary
-            );
-
-    const staffButton =
-        new ButtonBuilder()
-            .setCustomId(
-                'session_staff_count'
-            )
-            .setLabel(
-                `Staff: ${staffCount}`
-            )
-            .setEmoji('🛡️')
-            .setStyle(
-                ButtonStyle.Secondary
-            );
-
-    const queueButton =
-        new ButtonBuilder()
-            .setCustomId(
-                'session_queue_count'
-            )
-            .setLabel(
-                `Queue: ${queueCount}`
-            )
-            .setEmoji('👥')
-            .setStyle(
-                ButtonStyle.Secondary
-            );
+        applyEmoji(
+            new ButtonBuilder()
+                .setCustomId(
+                    'session_player_count'
+                )
+                .setLabel(
+                    `Player count: ${playerCount}/50`
+                )
+                .setStyle(
+                    ButtonStyle.Secondary
+                )
+                .setDisabled(true),
+            icons.players
+        );
 
 
     /*
      * ==========================================
-     * JOIN BUTTON
+     * STAFF COUNT
      * ==========================================
-     *
-     * Discord link buttons cannot be disabled,
-     * so offline uses a normal disabled button.
+     */
+
+    const staffButton =
+        applyEmoji(
+            new ButtonBuilder()
+                .setCustomId(
+                    'session_staff_count'
+                )
+                .setLabel(
+                    `Staff: ${staffCount}`
+                )
+                .setStyle(
+                    ButtonStyle.Secondary
+                )
+                .setDisabled(true),
+            icons.staff
+        );
+
+
+    /*
+     * ==========================================
+     * QUEUE
+     * ==========================================
+     */
+
+    const queueButton =
+        applyEmoji(
+            new ButtonBuilder()
+                .setCustomId(
+                    'session_queue_count'
+                )
+                .setLabel(
+                    `Queue: ${queueCount}`
+                )
+                .setStyle(
+                    ButtonStyle.Secondary
+                )
+                .setDisabled(true),
+            icons.queue
+        );
+
+
+    /*
+     * ==========================================
+     * JOIN
+     * ==========================================
      */
 
     let joinButton;
 
     if (isOnline) {
         joinButton =
-            new ButtonBuilder()
-                .setLabel(
-                    'Join'
-                )
-                .setEmoji('▶️')
-                .setStyle(
-                    ButtonStyle.Link
-                )
-                .setURL(
-                    JOIN_URL
-                );
+            applyEmoji(
+                new ButtonBuilder()
+                    .setLabel(
+                        'Join'
+                    )
+                    .setStyle(
+                        ButtonStyle.Link
+                    )
+                    .setURL(
+                        JOIN_URL
+                    ),
+                icons.join
+            );
+
     } else {
         joinButton =
-            new ButtonBuilder()
-                .setCustomId(
-                    'session_join_disabled'
-                )
-                .setLabel(
-                    'Join'
-                )
-                .setEmoji('▶️')
-                .setStyle(
-                    ButtonStyle.Secondary
-                )
-                .setDisabled(true);
+            applyEmoji(
+                new ButtonBuilder()
+                    .setCustomId(
+                        'session_join_disabled'
+                    )
+                    .setLabel(
+                        'Join'
+                    )
+                    .setStyle(
+                        ButtonStyle.Secondary
+                    )
+                    .setDisabled(true),
+                icons.join
+            );
     }
 
 
     /*
      * ==========================================
-     * VOTE BUTTON
+     * VOTE
      * ==========================================
      */
 
-    let voteButton = null;
+    let voteButton =
+        null;
 
     if (isVoting) {
         voteButton =
-            new ButtonBuilder()
-                .setCustomId(
-                    'session_vote'
-                )
-                .setLabel(
-                    `Vote: ${state.voters.size}/${state.voteTarget}`
-                )
-                .setEmoji('🗳️')
-                .setStyle(
-                    ButtonStyle.Primary
-                );
+            applyEmoji(
+                new ButtonBuilder()
+                    .setCustomId(
+                        'session_vote'
+                    )
+                    .setLabel(
+                        `Vote: ${state.voters.size}/${state.voteTarget}`
+                    )
+                    .setStyle(
+                        ButtonStyle.Primary
+                    ),
+                icons.vote
+            );
     }
 
 
     /*
-     * Discord only allows 5 buttons per row.
-     *
-     * Player, Staff, Queue, Join = 4.
-     * Vote becomes the fifth when voting.
+     * ==========================================
+     * BUTTON ROWS
+     * ==========================================
      */
+
     const informationRow =
         new ActionRowBuilder()
             .addComponents(
@@ -321,9 +380,6 @@ function buildSessionDashboard({
     const container =
         new ContainerBuilder()
 
-            /*
-             * Top image
-             */
             .addMediaGalleryComponents(
                 new MediaGalleryBuilder()
                     .addItems(
@@ -338,9 +394,6 @@ function buildSessionDashboard({
                 divider()
             )
 
-            /*
-             * Session Times | Status
-             */
             .addActionRowComponents(
                 new ActionRowBuilder()
                     .addComponents(
@@ -353,13 +406,10 @@ function buildSessionDashboard({
                 divider()
             )
 
-            /*
-             * Server information
-             */
             .addTextDisplayComponents(
                 new TextDisplayBuilder()
                     .setContent(
-                        '## :logo: Server Information\n\n' +
+                        `## ${logoEmoji}${logoEmoji ? ' | ' : ''}Server Information\n\n` +
 
                         `- **Server name:** ${SERVER_NAME}\n` +
                         `- **Server owner:** ${SERVER_OWNER}\n` +
@@ -372,9 +422,6 @@ function buildSessionDashboard({
                 divider()
             )
 
-            /*
-             * Player / Staff / Queue / Join / Vote
-             */
             .addActionRowComponents(
                 informationRow
             )
@@ -383,9 +430,6 @@ function buildSessionDashboard({
                 divider()
             )
 
-            /*
-             * Bottom image
-             */
             .addMediaGalleryComponents(
                 new MediaGalleryBuilder()
                     .addItems(
@@ -410,44 +454,53 @@ function buildSessionDashboard({
 }
 
 
-/*
- * Use this whenever the dashboard needs
- * to be sent for the first time.
- */
 async function sendSessionDashboard(
     channel,
     options = {}
 ) {
     const dashboard =
-        buildSessionDashboard({
-            guild: channel.guild,
+        await buildSessionDashboard({
+            guild:
+                channel.guild,
+
             ...options
         });
 
     return await channel.send({
         ...dashboard,
-        flags: [
-            'IsComponentsV2'
-        ]
+
+        flags:
+            MessageFlags.IsComponentsV2
     });
 }
 
 
 /*
- * Decorative buttons acknowledge the click
- * but don't actually do anything.
+ * Kept here so existing sessionButtons.js
+ * does not need to change.
  */
 async function handleDisplayButton(
     interaction
 ) {
+    const ids = [
+        'session_status',
+        'session_player_count',
+        'session_staff_count',
+        'session_queue_count'
+    ];
+
     if (
-        !DISPLAY_BUTTONS.includes(
+        !ids.includes(
             interaction.customId
         )
     ) {
         return false;
     }
 
+    /*
+     * They're disabled anyway, but this keeps
+     * compatibility if we enable one later.
+     */
     await interaction.deferUpdate();
 
     return true;

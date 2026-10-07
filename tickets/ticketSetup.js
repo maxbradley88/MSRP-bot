@@ -1,10 +1,26 @@
 const {
-    SlashCommandBuilder,
-    MessageFlags
+    Client,
+    GatewayIntentBits,
+    REST,
+    Routes,
+    MessageFlags,
+    ModalBuilder,
+    LabelBuilder,
+    TextInputBuilder,
+    TextInputStyle,
+    StringSelectMenuBuilder,
+    StringSelectMenuOptionBuilder,
+    ContainerBuilder,
+    TextDisplayBuilder,
+    SlashCommandBuilder
 } = require('discord.js');
 
 const { createTicketDashboard } = require('./ticketDashboard');
 const { setupTicketIcons } = require('./ticketIcons');
+const sendTicketDashboardCommand =
+    new SlashCommandBuilder()
+        .setName('send-ticket-dashboard')
+        .setDescription('Sends the ticket dashboard.');
 
 const config = require('./ticketConfig');
 
