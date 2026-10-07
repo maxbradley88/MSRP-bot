@@ -45,24 +45,31 @@ function loadData() {
 
 
 function saveData(data) {
-    fs.writeFileSync(
-        DATA_FILE,
-        JSON.stringify(
-            data,
-            null,
-            2
-        ),
-        'utf8'
-    );
+    try {
+        fs.writeFileSync(
+            DATA_FILE,
+            JSON.stringify(
+                data,
+                null,
+                2
+            ),
+            'utf8'
+        );
+
+    } catch (error) {
+        console.error(
+            '[REACTION ROLE DATA SAVE ERROR]',
+            error
+        );
+    }
 }
 
 
 function getEmojiKey(reaction) {
-    if (reaction.emoji.id) {
-        return reaction.emoji.id;
-    }
-
-    return reaction.emoji.name;
+    return (
+        reaction.emoji.id ||
+        reaction.emoji.name
+    );
 }
 
 
@@ -122,52 +129,68 @@ async function sendTemporaryMessage(
     try {
         const message =
             await channel.send({
-                content
+                content,
+                allowedMentions: {
+                    parse: []
+                }
             });
 
-        setTimeout(() => {
-            message.delete()
-                .catch(() => {});
-        }, 4000);
+        setTimeout(
+            () => {
+                message.delete()
+                    .catch(() => {});
+            },
+            5000
+        );
 
-    } catch {}
+    } catch (error) {
+        console.error(
+            '[REACTION ROLE TEMP MESSAGE ERROR]',
+            error
+        );
+    }
 }
 
 
 const command =
     new SlashCommandBuilder()
+
         .setName(
             'reaction-role-message'
         )
+
         .setDescription(
             'Adds a reaction role to a message.'
         )
 
-        .addRoleOption(option =>
-            option
-                .setName('role')
-                .setDescription(
-                    'Role users will receive.'
-                )
-                .setRequired(true)
+        .addRoleOption(
+            option =>
+                option
+                    .setName('role')
+                    .setDescription(
+                        'Role users will receive.'
+                    )
+                    .setRequired(true)
         )
 
-        .addStringOption(option =>
-            option
-                .setName('message-id')
-                .setDescription(
-                    'ID of the Discord message.'
-                )
-                .setRequired(true)
+        .addStringOption(
+            option =>
+                option
+                    .setName('message-id')
+                    .setDescription(
+                        'ID of the Discord message.'
+                    )
+                    .setRequired(true)
         )
 
-        .addStringOption(option =>
-            option
-                .setName('reaction')
-                .setDescription(
-                    'Custom server emoji, e.g. <:name:123456789>'
-                )
-                .setRequired(true)
+        .addStringOption(
+            option =>
+                option
+                    .setName('reaction')
+                    .setDescription(
+                        'Custom server emoji.'
+                    )
+                    .setRequired(true)
         );
 
 
@@ -203,17 +226,24 @@ async function execute(interaction) {
     if (!parsedEmoji) {
         await interaction.editReply({
             content:
-                '❌ Please use a custom Discord server emoji, for example `<:emoji:123456789012345678>`.'
+                '❌ Please use a custom Discord server emoji.'
         });
 
         return;
     }
 
 
-    const guildEmoji =
-        interaction.guild.emojis.cache.get(
-            parsedEmoji.id
-        );
+    let guildEmoji;
+
+    try {
+        guildEmoji =
+            await interaction.guild.emojis.fetch(
+                parsedEmoji.id
+            );
+
+    } catch {
+        guildEmoji = null;
+    }
 
 
     if (!guildEmoji) {
@@ -236,7 +266,7 @@ async function execute(interaction) {
     ) {
         await interaction.editReply({
             content:
-                '❌ I cannot manage that role. Move my bot role above it.'
+                '❌ I cannot manage that role. Move the bot role above it.'
         });
 
         return;
@@ -253,7 +283,7 @@ async function execute(interaction) {
     if (!message) {
         await interaction.editReply({
             content:
-                '❌ I could not find that message in this server.'
+                '❌ I could not find that message.'
         });
 
         return;
@@ -273,7 +303,7 @@ async function execute(interaction) {
 
         await interaction.editReply({
             content:
-                '❌ I could not add that reaction to the message.'
+                '❌ I could not add the reaction.'
         });
 
         return;
@@ -284,8 +314,9 @@ async function execute(interaction) {
         loadData();
 
 
-    data[message.id] =
-        data[message.id] || {};
+    if (!data[message.id]) {
+        data[message.id] = {};
+    }
 
 
     data[message.id][guildEmoji.id] = {
@@ -305,88 +336,170 @@ async function execute(interaction) {
     );
 
 
+    console.log(
+        `[REACTION ROLE CREATED] message=${message.id} emoji=${guildEmoji.id} role=${role.id}`
+    );
+
+
     await interaction.editReply({
         content:
-            `✅ Reaction role created.\n\n` +
-            `${guildEmoji} → ${role}`
+            `✅ Reaction role created.\n${guildEmoji} → ${role}`
     });
 }
 
+
+/*
+ * ======================================================
+ * REACTION ADDED
+ * ======================================================
+ */
 
 async function handleReactionAdd(
     reaction,
     user
 ) {
-    if (user.bot) {
-        return;
-    }
+    try {
 
-
-    if (reaction.partial) {
-        try {
-            await reaction.fetch();
-        } catch {
+        if (user.bot) {
             return;
         }
-    }
 
 
-    const data =
-        loadData();
-
-    const messageData =
-        data[
-            reaction.message.id
-        ];
-
-    if (!messageData) {
-        return;
-    }
+        if (user.partial) {
+            try {
+                await user.fetch();
+            } catch {}
+        }
 
 
-    const emojiKey =
-        getEmojiKey(
-            reaction
+        if (reaction.partial) {
+            try {
+                await reaction.fetch();
+            } catch (error) {
+                console.error(
+                    '[REACTION FETCH ERROR]',
+                    error
+                );
+
+                return;
+            }
+        }
+
+
+        if (reaction.message.partial) {
+            try {
+                await reaction.message.fetch();
+            } catch (error) {
+                console.error(
+                    '[REACTION MESSAGE FETCH ERROR]',
+                    error
+                );
+
+                return;
+            }
+        }
+
+
+        console.log(
+            `[REACTION ADD] ${user.username} reacted with ${reaction.emoji.name}`
         );
 
 
-    const config =
-        messageData[
-            emojiKey
-        ];
-
-    if (!config) {
-        return;
-    }
+        const data =
+            loadData();
 
 
-    const guild =
-        reaction.message.guild;
-
-    if (!guild) {
-        return;
-    }
+        const messageData =
+            data[
+                reaction.message.id
+            ];
 
 
-    try {
+        if (!messageData) {
+            console.log(
+                '[REACTION ROLE] No configuration for this message.'
+            );
+
+            return;
+        }
+
+
+        const emojiKey =
+            getEmojiKey(
+                reaction
+            );
+
+
+        const roleConfig =
+            messageData[
+                emojiKey
+            ];
+
+
+        if (!roleConfig) {
+            console.log(
+                `[REACTION ROLE] No configuration for emoji ${emojiKey}.`
+            );
+
+            return;
+        }
+
+
+        const guild =
+            reaction.message.guild;
+
+
+        if (!guild) {
+            return;
+        }
+
+
         const member =
             await guild.members.fetch(
                 user.id
             );
 
+
         const role =
-            guild.roles.cache.get(
-                config.roleId
+            await guild.roles.fetch(
+                roleConfig.roleId
             );
 
+
         if (!role) {
+            console.error(
+                '[REACTION ROLE] Configured role no longer exists.'
+            );
+
+            return;
+        }
+
+
+        /*
+         * User already has the role.
+         */
+        if (
+            member.roles.cache.has(
+                role.id
+            )
+        ) {
+            await sendTemporaryMessage(
+                reaction.message.channel,
+                `<@${user.id}> You already have this role, remove your reaction to remove the role.`
+            );
+
             return;
         }
 
 
         await member.roles.add(
             role,
-            'Reaction role added'
+            'MSRP reaction role'
+        );
+
+
+        console.log(
+            `[REACTION ROLE ADDED] ${user.username} → ${role.name}`
         );
 
 
@@ -394,6 +507,7 @@ async function handleReactionAdd(
             reaction.message.channel,
             `<@${user.id}> Role added.`
         );
+
 
     } catch (error) {
         console.error(
@@ -404,87 +518,147 @@ async function handleReactionAdd(
 }
 
 
+/*
+ * ======================================================
+ * REACTION REMOVED
+ * ======================================================
+ */
+
 async function handleReactionRemove(
     reaction,
     user
 ) {
-    if (user.bot) {
-        return;
-    }
+    try {
 
-
-    if (reaction.partial) {
-        try {
-            await reaction.fetch();
-        } catch {
+        if (user.bot) {
             return;
         }
-    }
 
 
-    const data =
-        loadData();
-
-    const messageData =
-        data[
-            reaction.message.id
-        ];
-
-    if (!messageData) {
-        return;
-    }
+        if (user.partial) {
+            try {
+                await user.fetch();
+            } catch {}
+        }
 
 
-    const emojiKey =
-        getEmojiKey(
-            reaction
+        if (reaction.partial) {
+            try {
+                await reaction.fetch();
+            } catch (error) {
+                console.error(
+                    '[REACTION REMOVE FETCH ERROR]',
+                    error
+                );
+
+                return;
+            }
+        }
+
+
+        if (reaction.message.partial) {
+            try {
+                await reaction.message.fetch();
+            } catch (error) {
+                console.error(
+                    '[REACTION REMOVE MESSAGE FETCH ERROR]',
+                    error
+                );
+
+                return;
+            }
+        }
+
+
+        console.log(
+            `[REACTION REMOVE] ${user.username} removed ${reaction.emoji.name}`
         );
 
 
-    const config =
-        messageData[
-            emojiKey
-        ];
-
-    if (!config) {
-        return;
-    }
+        const data =
+            loadData();
 
 
-    const guild =
-        reaction.message.guild;
-
-    if (!guild) {
-        return;
-    }
+        const messageData =
+            data[
+                reaction.message.id
+            ];
 
 
-    try {
+        if (!messageData) {
+            return;
+        }
+
+
+        const emojiKey =
+            getEmojiKey(
+                reaction
+            );
+
+
+        const roleConfig =
+            messageData[
+                emojiKey
+            ];
+
+
+        if (!roleConfig) {
+            return;
+        }
+
+
+        const guild =
+            reaction.message.guild;
+
+
+        if (!guild) {
+            return;
+        }
+
+
         const member =
             await guild.members.fetch(
                 user.id
             );
 
+
         const role =
-            guild.roles.cache.get(
-                config.roleId
+            await guild.roles.fetch(
+                roleConfig.roleId
             );
+
 
         if (!role) {
             return;
         }
 
 
-        await member.roles.remove(
-            role,
-            'Reaction role removed'
-        );
+        /*
+         * Only try removing if they
+         * actually have the role.
+         */
+        if (
+            member.roles.cache.has(
+                role.id
+            )
+        ) {
+            await member.roles.remove(
+                role,
+                'MSRP reaction role removed'
+            );
 
 
-        await sendTemporaryMessage(
-            reaction.message.channel,
-            `<@${user.id}> Role removed.`
-        );
+            console.log(
+                `[REACTION ROLE REMOVED] ${user.username} → ${role.name}`
+            );
+
+
+            await sendTemporaryMessage(
+                reaction.message.channel,
+                `<@${user.id}> Role removed.`
+            );
+        }
+
 
     } catch (error) {
         console.error(

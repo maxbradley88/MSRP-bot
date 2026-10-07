@@ -1480,16 +1480,6 @@ client.on(
             // ==================================================
 
 
-if (
-    interaction.commandName ===
-    'reaction-role-message'
-) {
-    await reactionRole.execute(
-        interaction
-    );
-
-    return;
-}
 
 if (
     interaction.isChatInputCommand()
@@ -1503,6 +1493,17 @@ if (
     if (!hasCommandPermission) {
         return;
     }
+
+    if (
+    interaction.commandName ===
+    'reaction-role-message'
+) {
+    await reactionRole.execute(
+        interaction
+    );
+
+    return;
+}
 
     if (
         interaction.commandName ===
