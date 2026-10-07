@@ -4,7 +4,9 @@ const state = {
     voters: new Set(),
     startedAt: null,
     emptySince: null,
-    shuttingDown: false
+    shuttingDown: false,
+    dashboardMessageId: null,
+    voteMessageId: null
 };
 
 function getState() {
@@ -22,6 +24,7 @@ function startVote(target) {
     state.startedAt = null;
     state.emptySince = null;
     state.shuttingDown = false;
+    state.voteMessageId = null;
 }
 
 function addVote(userId) {
@@ -40,6 +43,10 @@ function getVoteCount() {
     return state.voters.size;
 }
 
+function getVoters() {
+    return [...state.voters];
+}
+
 function startSession() {
     state.status = 'active';
     state.startedAt = Date.now();
@@ -47,6 +54,7 @@ function startSession() {
     state.voters.clear();
     state.emptySince = null;
     state.shuttingDown = false;
+    state.voteMessageId = null;
 }
 
 function startShutdown() {
@@ -61,6 +69,7 @@ function stopSession() {
     state.voters.clear();
     state.emptySince = null;
     state.shuttingDown = false;
+    state.voteMessageId = null;
 }
 
 function setEmptySince(timestamp) {
@@ -71,6 +80,14 @@ function clearEmptySince() {
     state.emptySince = null;
 }
 
+function setDashboardMessageId(messageId) {
+    state.dashboardMessageId = messageId || null;
+}
+
+function setVoteMessageId(messageId) {
+    state.voteMessageId = messageId || null;
+}
+
 module.exports = {
     getState,
     setStatus,
@@ -79,9 +96,12 @@ module.exports = {
     removeVote,
     hasVoted,
     getVoteCount,
+    getVoters,
     startSession,
     startShutdown,
     stopSession,
     setEmptySince,
-    clearEmptySince
+    clearEmptySince,
+    setDashboardMessageId,
+    setVoteMessageId
 };

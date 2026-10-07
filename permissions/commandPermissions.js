@@ -42,6 +42,10 @@ const commandPermissions = {
     '1547525713853288448'
 ],
 
+'session-vote': [
+    '1548126738876342272'
+],
+
 };
 
 

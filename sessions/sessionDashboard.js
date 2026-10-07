@@ -15,7 +15,8 @@ const {
 } = require('discord.js');
 
 const {
-    getState
+    getState,
+    setDashboardMessageId
 } = require('./sessionState');
 
 const {
@@ -23,21 +24,13 @@ const {
     buttonEmoji
 } = require('./sessionIcons');
 
+const {
+    getApiSnapshot,
+    fetchErlcSnapshot
+} = require('./erlcApi');
 
-const STAFF_ROLE_ID =
-    '1547535313096810546';
-
-const JOIN_URL =
-    'https://erlc.gg/join/MSRPAU';
-
-const SERVER_NAME =
-    'Melbourne State Roleplay | Strict | VC | New';
-
-const SERVER_OWNER =
-    '[Monkeyman443hi](https://www.roblox.com/users/3927928067/profile?friendshipSourceType=PlayerSearch)';
-
-const SERVER_CODE =
-    'MSRPAU';
+const sessionConfig =
+    require('./sessionConfig');
 
 
 function divider() {
@@ -57,164 +50,151 @@ function getStaffCount(guild) {
     return guild.members.cache.filter(
         member =>
             member.roles.cache.has(
-                STAFF_ROLE_ID
+                sessionConfig.staffRoleId
             ) &&
             !member.user.bot
     ).size;
 }
 
 
-function applyEmoji(
-    button,
-    emoji
-) {
+function applyEmoji(button, emoji) {
     const formatted =
         buttonEmoji(emoji);
 
     if (formatted) {
-        button.setEmoji(
-            formatted
-        );
+        button.setEmoji(formatted);
     }
 
     return button;
 }
 
 
+function getAttachmentUrls(message) {
+    if (!message) {
+        return {};
+    }
+
+    const top =
+        message.attachments.find(
+            item =>
+                item.name ===
+                'session-dashboard.png'
+        );
+
+    const bottom =
+        message.attachments.find(
+            item =>
+                item.name ===
+                'session-footer.png'
+        );
+
+    return {
+        top: top?.url || null,
+        bottom: bottom?.url || null
+    };
+}
+
+
 async function buildSessionDashboard({
     guild,
-    playerCount = 0,
-    queueCount = 0
+    apiSnapshot = getApiSnapshot(),
+    attachmentUrls = {}
 }) {
-    const state =
-        getState();
+    const state = getState();
 
     const icons =
-        await ensureSessionIcons(
-            guild
-        );
+        await ensureSessionIcons(guild);
 
     const staffCount =
         getStaffCount(guild);
 
     const now =
-        Math.floor(
-            Date.now() / 1000
-        );
+        Math.floor(Date.now() / 1000);
 
-    const isOnline =
+    const sessionActive =
         state.status === 'active' ||
         state.status === 'shutting-down';
 
     const isVoting =
         state.status === 'vote';
 
-
-    /*
-     * ==========================================
-     * ACTUAL SERVER LOGO EMOJI
-     * ==========================================
-     */
-
     const logoEmoji =
         icons.logo
             ? icons.logo.toString()
             : '';
 
+    const files = [];
 
-    /*
-     * ==========================================
-     * IMAGES
-     * ==========================================
-     */
+    let topUrl =
+        attachmentUrls.top;
 
-    const topImage =
-        new AttachmentBuilder(
-            path.join(
-                __dirname,
-                '..',
-                'images',
-                'ticket-dashboard.png'
-            ),
-            {
-                name:
-                    'session-dashboard.png'
-            }
+    let bottomUrl =
+        attachmentUrls.bottom;
+
+    if (!topUrl) {
+        files.push(
+            new AttachmentBuilder(
+                path.join(
+                    __dirname,
+                    '..',
+                    'images',
+                    'ticket-dashboard.png'
+                ),
+                {
+                    name: 'session-dashboard.png'
+                }
+            )
         );
 
-    const bottomImage =
-        new AttachmentBuilder(
-            path.join(
-                __dirname,
-                '..',
-                'images',
-                'image.png'
-            ),
-            {
-                name:
-                    'session-footer.png'
-            }
+        topUrl =
+            'attachment://session-dashboard.png';
+    }
+
+    if (!bottomUrl) {
+        files.push(
+            new AttachmentBuilder(
+                path.join(
+                    __dirname,
+                    '..',
+                    'images',
+                    'image.png'
+                ),
+                {
+                    name: 'session-footer.png'
+                }
+            )
         );
 
-
-    /*
-     * ==========================================
-     * SESSION TIMES
-     * ==========================================
-     */
+        bottomUrl =
+            'attachment://session-footer.png';
+    }
 
     const sessionTimesButton =
         applyEmoji(
             new ButtonBuilder()
-                .setCustomId(
-                    'session_times'
-                )
-                .setLabel(
-                    'Session Times'
-                )
-                .setStyle(
-                    ButtonStyle.Secondary
-                ),
+                .setCustomId('session_times')
+                .setLabel('Session Times')
+                .setStyle(ButtonStyle.Secondary),
             icons.sessionTimes
         );
-
-
-    /*
-     * ==========================================
-     * ONLINE/OFFLINE STATUS
-     * ==========================================
-     */
 
     const statusButton =
         applyEmoji(
             new ButtonBuilder()
-                .setCustomId(
-                    'session_status'
-                )
+                .setCustomId('session_status')
                 .setLabel(
-                    isOnline
+                    apiSnapshot.apiOnline
                         ? 'Online'
-                        : isVoting
-                            ? 'Voting'
-                            : 'Offline'
+                        : 'Offline'
                 )
                 .setStyle(
-                    isOnline
+                    apiSnapshot.apiOnline
                         ? ButtonStyle.Success
-                        : isVoting
-                            ? ButtonStyle.Primary
-                            : ButtonStyle.Danger
+                        : ButtonStyle.Danger
                 )
                 .setDisabled(true),
             icons.status
         );
-
-
-    /*
-     * ==========================================
-     * PLAYER COUNT
-     * ==========================================
-     */
 
     const playerButton =
         applyEmoji(
@@ -223,21 +203,16 @@ async function buildSessionDashboard({
                     'session_player_count'
                 )
                 .setLabel(
-                    `Player count: ${playerCount}/50`
+                    `Player count: ${apiSnapshot.playerCount}/${apiSnapshot.maxPlayers || 50}`
                 )
                 .setStyle(
-                    ButtonStyle.Secondary
+                    sessionActive
+                        ? ButtonStyle.Primary
+                        : ButtonStyle.Secondary
                 )
                 .setDisabled(true),
             icons.players
         );
-
-
-    /*
-     * ==========================================
-     * STAFF COUNT
-     * ==========================================
-     */
 
     const staffButton =
         applyEmoji(
@@ -249,18 +224,13 @@ async function buildSessionDashboard({
                     `Staff: ${staffCount}`
                 )
                 .setStyle(
-                    ButtonStyle.Secondary
+                    sessionActive
+                        ? ButtonStyle.Danger
+                        : ButtonStyle.Secondary
                 )
                 .setDisabled(true),
             icons.staff
         );
-
-
-    /*
-     * ==========================================
-     * QUEUE
-     * ==========================================
-     */
 
     const queueButton =
         applyEmoji(
@@ -269,7 +239,7 @@ async function buildSessionDashboard({
                     'session_queue_count'
                 )
                 .setLabel(
-                    `Queue: ${queueCount}`
+                    `Queue: ${apiSnapshot.queueCount}`
                 )
                 .setStyle(
                     ButtonStyle.Secondary
@@ -278,82 +248,27 @@ async function buildSessionDashboard({
             icons.queue
         );
 
-
-    /*
-     * ==========================================
-     * JOIN
-     * ==========================================
-     */
-
-    let joinButton;
-
-    if (isOnline) {
-        joinButton =
-            applyEmoji(
+    const joinButton =
+        sessionActive
+            ? applyEmoji(
                 new ButtonBuilder()
-                    .setLabel(
-                        'Join'
-                    )
-                    .setStyle(
-                        ButtonStyle.Link
-                    )
-                    .setURL(
-                        JOIN_URL
-                    ),
+                    .setCustomId('session_join')
+                    .setLabel('Join')
+                    .setStyle(ButtonStyle.Success),
                 icons.join
-            );
-
-    } else {
-        joinButton =
-            applyEmoji(
+            )
+            : applyEmoji(
                 new ButtonBuilder()
                     .setCustomId(
                         'session_join_disabled'
                     )
-                    .setLabel(
-                        'Join'
-                    )
+                    .setLabel('Join')
                     .setStyle(
                         ButtonStyle.Secondary
                     )
                     .setDisabled(true),
                 icons.join
             );
-    }
-
-
-    /*
-     * ==========================================
-     * VOTE
-     * ==========================================
-     */
-
-    let voteButton =
-        null;
-
-    if (isVoting) {
-        voteButton =
-            applyEmoji(
-                new ButtonBuilder()
-                    .setCustomId(
-                        'session_vote'
-                    )
-                    .setLabel(
-                        `Vote: ${state.voters.size}/${state.voteTarget}`
-                    )
-                    .setStyle(
-                        ButtonStyle.Primary
-                    ),
-                icons.vote
-            );
-    }
-
-
-    /*
-     * ==========================================
-     * BUTTON ROWS
-     * ==========================================
-     */
 
     const informationRow =
         new ActionRowBuilder()
@@ -364,36 +279,52 @@ async function buildSessionDashboard({
                 joinButton
             );
 
-    if (voteButton) {
-        informationRow.addComponents(
-            voteButton
-        );
+    let votingRow = null;
+
+    if (isVoting) {
+        const voteButton =
+            applyEmoji(
+                new ButtonBuilder()
+                    .setCustomId('session_vote')
+                    .setLabel(
+                        `Vote: ${state.voters.size}/${state.voteTarget}`
+                    )
+                    .setStyle(
+                        ButtonStyle.Primary
+                    ),
+                icons.vote
+            );
+
+        const viewVotersButton =
+            new ButtonBuilder()
+                .setCustomId(
+                    'session_view_voters'
+                )
+                .setLabel('View Voters')
+                .setStyle(
+                    ButtonStyle.Secondary
+                );
+
+        votingRow =
+            new ActionRowBuilder()
+                .addComponents(
+                    voteButton,
+                    viewVotersButton
+                );
     }
-
-
-    /*
-     * ==========================================
-     * COMPONENTS V2 CONTAINER
-     * ==========================================
-     */
 
     const container =
         new ContainerBuilder()
-
             .addMediaGalleryComponents(
                 new MediaGalleryBuilder()
                     .addItems(
                         new MediaGalleryItemBuilder()
-                            .setURL(
-                                'attachment://session-dashboard.png'
-                            )
+                            .setURL(topUrl)
                     )
             )
-
             .addSeparatorComponents(
                 divider()
             )
-
             .addActionRowComponents(
                 new ActionRowBuilder()
                     .addComponents(
@@ -401,55 +332,48 @@ async function buildSessionDashboard({
                         statusButton
                     )
             )
-
             .addSeparatorComponents(
                 divider()
             )
-
             .addTextDisplayComponents(
                 new TextDisplayBuilder()
                     .setContent(
                         `## ${logoEmoji}${logoEmoji ? ' | ' : ''}Server Information\n\n` +
-
-                        `- **Server name:** ${SERVER_NAME}\n` +
-                        `- **Server owner:** ${SERVER_OWNER}\n` +
-                        `- **Server Code:** ${SERVER_CODE}\n` +
+                        `- **Server name:** ${sessionConfig.serverName}\n` +
+                        `- **Server owner:** ${sessionConfig.serverOwner}\n` +
+                        `- **Server Code:** ${sessionConfig.serverCode}\n` +
                         `- **Last update:** <t:${now}:R>`
                     )
             )
-
             .addSeparatorComponents(
                 divider()
             )
-
             .addActionRowComponents(
                 informationRow
-            )
-
-            .addSeparatorComponents(
-                divider()
-            )
-
-            .addMediaGalleryComponents(
-                new MediaGalleryBuilder()
-                    .addItems(
-                        new MediaGalleryItemBuilder()
-                            .setURL(
-                                'attachment://session-footer.png'
-                            )
-                    )
             );
 
+    if (votingRow) {
+        container
+            .addActionRowComponents(
+                votingRow
+            );
+    }
+
+    container
+        .addSeparatorComponents(
+            divider()
+        )
+        .addMediaGalleryComponents(
+            new MediaGalleryBuilder()
+                .addItems(
+                    new MediaGalleryItemBuilder()
+                        .setURL(bottomUrl)
+                )
+        );
 
     return {
-        components: [
-            container
-        ],
-
-        files: [
-            topImage,
-            bottomImage
-        ]
+        components: [container],
+        files
     };
 }
 
@@ -460,25 +384,182 @@ async function sendSessionDashboard(
 ) {
     const dashboard =
         await buildSessionDashboard({
-            guild:
-                channel.guild,
-
+            guild: channel.guild,
             ...options
         });
 
-    return await channel.send({
-        ...dashboard,
+    const message =
+        await channel.send({
+            ...dashboard,
+            flags:
+                MessageFlags.IsComponentsV2
+        });
 
-        flags:
-            MessageFlags.IsComponentsV2
-    });
+    setDashboardMessageId(
+        message.id
+    );
+
+    return message;
 }
 
 
-/*
- * Kept here so existing sessionButtons.js
- * does not need to change.
- */
+function isSessionDashboardMessage(message) {
+    if (!message) {
+        return false;
+    }
+
+    try {
+        const raw = JSON.stringify(
+            message.components
+        );
+
+        return (
+            raw.includes('session_times') &&
+            raw.includes('session_player_count')
+        );
+    } catch {
+        return false;
+    }
+}
+
+
+async function findSessionDashboard(channel) {
+    const state = getState();
+
+    if (state.dashboardMessageId) {
+        try {
+            const known =
+                await channel.messages.fetch(
+                    state.dashboardMessageId
+                );
+
+            if (
+                isSessionDashboardMessage(
+                    known
+                )
+            ) {
+                return known;
+            }
+        } catch {}
+    }
+
+    const messages =
+        await channel.messages.fetch({
+            limit: 100
+        });
+
+    const dashboard =
+        messages.find(
+            message =>
+                message.author?.id ===
+                    channel.client.user.id &&
+                isSessionDashboardMessage(
+                    message
+                )
+        );
+
+    if (dashboard) {
+        setDashboardMessageId(
+            dashboard.id
+        );
+    }
+
+    return dashboard || null;
+}
+
+
+async function updateSessionDashboardMessage(
+    message,
+    apiSnapshot = getApiSnapshot()
+) {
+    if (!message) {
+        return null;
+    }
+
+    const dashboard =
+        await buildSessionDashboard({
+            guild: message.guild,
+            apiSnapshot,
+            attachmentUrls:
+                getAttachmentUrls(message)
+        });
+
+    const payload = {
+        components:
+            dashboard.components
+    };
+
+    if (dashboard.files.length > 0) {
+        payload.files =
+            dashboard.files;
+    }
+
+    return await message.edit(
+        payload
+    );
+}
+
+
+async function refreshSessionDashboard(client) {
+    try {
+        const channel =
+            await client.channels.fetch(
+                sessionConfig.sessionChannelId
+            );
+
+        if (
+            !channel ||
+            !channel.isTextBased()
+        ) {
+            console.error(
+                '[SESSION DASHBOARD] Session channel could not be found.'
+            );
+
+            return;
+        }
+
+        const apiSnapshot =
+            await fetchErlcSnapshot();
+
+        const dashboard =
+            await findSessionDashboard(
+                channel
+            );
+
+        if (!dashboard) {
+            return;
+        }
+
+        await updateSessionDashboardMessage(
+            dashboard,
+            apiSnapshot
+        );
+
+    } catch (error) {
+        console.error(
+            '[SESSION DASHBOARD REFRESH ERROR]',
+            error
+        );
+    }
+}
+
+
+function startSessionDashboardUpdater(client) {
+    void refreshSessionDashboard(
+        client
+    );
+
+    return setInterval(
+        () => {
+            void refreshSessionDashboard(
+                client
+            );
+        },
+        sessionConfig.dashboardRefreshMs
+    );
+}
+
+
 async function handleDisplayButton(
     interaction
 ) {
@@ -497,12 +578,7 @@ async function handleDisplayButton(
         return false;
     }
 
-    /*
-     * They're disabled anyway, but this keeps
-     * compatibility if we enable one later.
-     */
     await interaction.deferUpdate();
-
     return true;
 }
 
@@ -510,5 +586,9 @@ async function handleDisplayButton(
 module.exports = {
     buildSessionDashboard,
     sendSessionDashboard,
+    findSessionDashboard,
+    updateSessionDashboardMessage,
+    refreshSessionDashboard,
+    startSessionDashboardUpdater,
     handleDisplayButton
 };

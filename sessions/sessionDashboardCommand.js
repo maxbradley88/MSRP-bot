@@ -1,10 +1,18 @@
 const {
-    SlashCommandBuilder
+    SlashCommandBuilder,
+    MessageFlags
 } = require('discord.js');
 
 const {
     sendSessionDashboard
 } = require('./sessionDashboard');
+
+const {
+    fetchErlcSnapshot
+} = require('./erlcApi');
+
+const sessionConfig =
+    require('./sessionConfig');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -15,12 +23,30 @@ module.exports = {
 
     async execute(interaction) {
         await interaction.deferReply({
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
 
         try {
+            const channel =
+                await interaction.client.channels.fetch(
+                    sessionConfig.sessionChannelId
+                );
+
+            if (
+                !channel ||
+                !channel.isTextBased()
+            ) {
+                throw new Error(
+                    'Session channel not found.'
+                );
+            }
+
+            const apiSnapshot =
+                await fetchErlcSnapshot();
+
             await sendSessionDashboard(
-                interaction.channel
+                channel,
+                { apiSnapshot }
             );
 
             await interaction.editReply({
