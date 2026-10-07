@@ -34,7 +34,7 @@ const {
 
 
 const { createTicket } = require('./tickets/ticketCreate');
-
+const ticketSetup = require('./tickets/ticketSetup');
 const config = require('./tickets/ticketConfig');
 const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
 const ticketState = require('./tickets/ticketState');
@@ -2355,9 +2355,7 @@ if (
     }
 
 
-    // ==================================================
-    // RULES
-    // ==================================================
+
 
 
 
