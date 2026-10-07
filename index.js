@@ -33,9 +33,6 @@ const {
 } = require('discord.js');
 
 
-
-const ticketSetup = require('./tickets/ticketSetup');
-
 const { createTicket } = require('./tickets/ticketCreate');
 
 const config = require('./tickets/ticketConfig');
@@ -44,7 +41,15 @@ const ticketState = require('./tickets/ticketState');
 const ticketStatus = require('./tickets/ticketStatus');
 const ticketPermissions = require('./tickets/ticketPermissions');
 const { sendTicketCloseNotifications } = require('./tickets/ticketCloseMessage');
+const sessionDashboardCommand =
+    require('./sessions/sessionDashboardCommand');
 
+const sessionTimesCommand =
+    require('./sessions/sessionTimesCommand');
+
+const {
+    handleSessionButton
+} = require('./sessions/sessionButtons');
 
 
 const client = new Client({
@@ -1312,11 +1317,11 @@ client.once(
 
                 {
 
-                    body: [
-
-                        ticketSetup.command.toJSON()
-
-                    ]
+body: [
+    ticketSetup.command.toJSON(),
+    sessionDashboardCommand.data.toJSON(),
+    sessionTimesCommand.data.toJSON()
+]
 
                 }
 
@@ -1380,35 +1385,48 @@ client.on(
 
 
 
-            if (
+if (
+    interaction.isChatInputCommand()
+) {
 
-                interaction.isChatInputCommand()
+    if (
+        interaction.commandName ===
+        'send-ticket-dashboard'
+    ) {
+        await ticketSetup.execute(
+            interaction
+        );
 
-            ) {
-
-
-
-                if (
-
-                    interaction.commandName ===
-
-                    'send-ticket-dashboard'
-
-                ) {
-
-                    await ticketSetup.execute(
-
-                        interaction
-
-                    );
-
-                }
+        return;
+    }
 
 
+    if (
+        interaction.commandName ===
+        'send-session-dashboard'
+    ) {
+        await sessionDashboardCommand.execute(
+            interaction
+        );
 
-                return;
+        return;
+    }
 
-            }
+
+    if (
+        interaction.commandName ===
+        'set-session-times'
+    ) {
+        await sessionTimesCommand.execute(
+            interaction
+        );
+
+        return;
+    }
+
+
+    return;
+}
 
 
 
@@ -2323,11 +2341,23 @@ client.on(
 
 
 
-            if (
+if (
+    interaction.isButton()
+) {
 
-                interaction.isButton()
+    const handledSessionButton =
+        await handleSessionButton(
+            interaction
+        );
 
-            ) {
+    if (handledSessionButton) {
+        return;
+    }
+
+
+    // ==================================================
+    // RULES
+    // ==================================================
 
 
 
