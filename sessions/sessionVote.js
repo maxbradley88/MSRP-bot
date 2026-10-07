@@ -1,264 +1,281 @@
 const {
     SlashCommandBuilder,
-    MessageFlags,
-    ButtonBuilder,
-    ButtonStyle,
-    ActionRowBuilder,
     ContainerBuilder,
-    TextDisplayBuilder
+    TextDisplayBuilder,
+    MessageFlags
 } = require('discord.js');
 
+const sessionConfig = require('./sessionConfig');
 const {
     getState,
     startVote,
-    setVoteMessageId
+    addVote,
+    removeVote,
+    hasVoted,
+    startSession,
+    setVoteAnnouncement,
+    clearVoteAnnouncement
 } = require('./sessionState');
 
 const {
-    findSessionDashboard,
-    updateSessionDashboardMessage
+    refreshSessionDashboard
 } = require('./sessionDashboard');
 
 const {
-    getApiSnapshot
-} = require('./erlcApi');
+    startMelonlySession
+} = require('./melonlyApi');
 
-const {
-    ensureSessionIcons,
-    buttonEmoji
-} = require('./sessionIcons');
+const command = new SlashCommandBuilder()
+    .setName('session-vote')
+    .setDescription('Starts a session vote.')
+    .addIntegerOption(option =>
+        option
+            .setName('votes-required')
+            .setDescription('Number of votes required to start the session.')
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(50)
+    );
 
-const sessionConfig =
-    require('./sessionConfig');
+function pingText() {
+    return `@here ${sessionConfig.pingRoleIds.map(id => `<@&${id}>`).join(' ')}`;
+}
 
+function buildVoteAnnouncement() {
+    return new ContainerBuilder()
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                '## A session vote has been started!\n' +
+                'Use the button on the Sessions Dashboard to cast your vote. Once the goal is reached, a session will start.'
+            )
+        );
+}
 
-function applyEmoji(button, emoji) {
-    const formatted =
-        buttonEmoji(emoji);
+function buildStartedAnnouncement() {
+    return new ContainerBuilder()
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                '## A session has started!\n' +
+                `Join using the button on the Sessions Dashboard or use code: **${sessionConfig.fallbackJoinCode}**.`
+            )
+        );
+}
 
-    if (formatted) {
-        button.setEmoji(formatted);
+async function getAnnouncementChannel(client) {
+    const channel = await client.channels
+        .fetch(sessionConfig.announcementChannelId)
+        .catch(() => null);
+
+    if (!channel?.isTextBased()) {
+        throw new Error('The configured session announcement channel could not be found.');
     }
 
-    return button;
+    return channel;
 }
 
-
-function getMentionLine() {
-    return (
-        '@here, ' +
-        sessionConfig.announcementRoleIds
-            .map(id => `<@&${id}>`)
-            .join(', ')
-    );
-}
-
-
-async function buildVoteAnnouncement(
-    guild
-) {
+async function deleteVoteAnnouncement(client) {
     const state = getState();
 
-    const icons =
-        await ensureSessionIcons(
-            guild
-        );
-
-    const voteButton =
-        applyEmoji(
-            new ButtonBuilder()
-                .setCustomId('session_vote')
-                .setLabel(
-                    `Vote: ${state.voters.size}/${state.voteTarget}`
-                )
-                .setStyle(
-                    ButtonStyle.Primary
-                ),
-            icons.vote
-        );
-
-    const container =
-        new ContainerBuilder()
-            .addTextDisplayComponents(
-                new TextDisplayBuilder()
-                    .setContent(
-                        `${getMentionLine()}\n\n` +
-                        `A session vote has been started! To start a session we require **${state.voteTarget} votes**, use the vote button to add your vote.`
-                    )
-            )
-            .addActionRowComponents(
-                new ActionRowBuilder()
-                    .addComponents(
-                        voteButton
-                    )
-            );
-
-    return {
-        components: [container],
-        flags: MessageFlags.IsComponentsV2,
-        allowedMentions: {
-            parse: ['everyone'],
-            roles:
-                sessionConfig.announcementRoleIds
-        }
-    };
-}
-
-
-async function refreshVoteAnnouncement(
-    channel
-) {
-    const state = getState();
-
-    if (!state.voteMessageId) {
+    if (!state.voteAnnouncementChannelId || !state.voteAnnouncementMessageId) {
         return;
     }
 
-    try {
-        const message =
-            await channel.messages.fetch(
-                state.voteMessageId
-            );
+    const channel = await client.channels
+        .fetch(state.voteAnnouncementChannelId)
+        .catch(() => null);
 
-        const payload =
-            await buildVoteAnnouncement(
-                channel.guild
-            );
+    const message = channel?.isTextBased()
+        ? await channel.messages.fetch(state.voteAnnouncementMessageId).catch(() => null)
+        : null;
 
-        await message.edit({
-            components:
-                payload.components
-        });
-
-    } catch (error) {
-        console.error(
-            '[SESSION VOTE MESSAGE UPDATE ERROR]',
-            error
-        );
+    if (message) {
+        await message.delete().catch(() => null);
     }
+
+    clearVoteAnnouncement();
 }
 
+async function beginVote(interaction) {
+    const state = getState();
 
-module.exports = {
-    data: new SlashCommandBuilder()
-        .setName('session-vote')
-        .setDescription(
-            'Starts a session vote.'
-        )
-        .addIntegerOption(
-            option =>
-                option
-                    .setName('votes')
-                    .setDescription(
-                        'Number of votes required to start the session.'
-                    )
-                    .setMinValue(1)
-                    .setMaxValue(50)
-                    .setRequired(true)
-        ),
-
-    async execute(interaction) {
-        await interaction.deferReply({
+    if (state.status === 'vote') {
+        await interaction.reply({
+            content: '❌ A session vote is already running.',
             flags: MessageFlags.Ephemeral
         });
+        return;
+    }
 
-        const target =
-            interaction.options.getInteger(
-                'votes',
-                true
-            );
+    if (state.status === 'active' || state.status === 'shutting-down') {
+        await interaction.reply({
+            content: '❌ A session is already active.',
+            flags: MessageFlags.Ephemeral
+        });
+        return;
+    }
 
-        const state = getState();
+    const target = interaction.options.getInteger('votes-required', true);
 
-        if (state.status === 'active') {
-            await interaction.editReply({
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    startVote(target);
+
+    const channel = await getAnnouncementChannel(interaction.client);
+
+    const message = await channel.send({
+        components: [
+            new TextDisplayBuilder().setContent(pingText()),
+            buildVoteAnnouncement()
+        ],
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: {
+            parse: ['everyone'],
+            roles: sessionConfig.pingRoleIds
+        }
+    });
+
+    setVoteAnnouncement(channel.id, message.id);
+    await refreshSessionDashboard(interaction.client);
+
+    await interaction.editReply({
+        content: `✅ Session vote started. Goal: ${target} vote${target === 1 ? '' : 's'}.`
+    });
+}
+
+async function completeVote(client) {
+    const state = getState();
+
+    if (state.status !== 'vote' || state.voters.size < state.voteTarget) {
+        return false;
+    }
+
+    try {
+        /*
+         * Melonly MUST start successfully before we unlock Join or send the
+         * session-start ping. If this throws, the vote remains active.
+         */
+        await startMelonlySession();
+    } catch (error) {
+        console.error('[MELONLY SESSION START ERROR]', error);
+
+        const channel = await getAnnouncementChannel(client).catch(() => null);
+        if (channel) {
+            await channel.send({
                 content:
-                    '❌ A session is already active.'
+                    '❌ The vote goal was reached, but the bot could not start the session on Melonly. ' +
+                    'The Join button has not been unlocked.\n' +
+                    `Reason: ${error.message}`
             });
-
-            return;
         }
 
-        if (state.status === 'vote') {
-            await interaction.editReply({
-                content:
-                    '❌ A session vote is already running.'
-            });
+        return false;
+    }
 
-            return;
+    startSession();
+    await deleteVoteAnnouncement(client);
+    await refreshSessionDashboard(client);
+
+    const channel = await getAnnouncementChannel(client);
+
+    await channel.send({
+        components: [
+            new TextDisplayBuilder().setContent(pingText()),
+            buildStartedAnnouncement()
+        ],
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: {
+            parse: ['everyone'],
+            roles: sessionConfig.pingRoleIds
         }
+    });
 
-        try {
-            const channel =
-                await interaction.client.channels.fetch(
-                    sessionConfig.sessionChannelId
-                );
+    return true;
+}
 
-            if (
-                !channel ||
-                !channel.isTextBased()
-            ) {
-                throw new Error(
-                    'Session channel not found.'
-                );
-            }
+async function toggleVote(interaction) {
+    const state = getState();
 
-            const dashboard =
-                await findSessionDashboard(
-                    channel
-                );
+    if (state.status !== 'vote') {
+        await interaction.reply({
+            content: 'There is no active session vote.',
+            flags: MessageFlags.Ephemeral
+        });
+        return true;
+    }
 
-            if (!dashboard) {
-                await interaction.editReply({
-                    content:
-                        '❌ I could not find the session dashboard in the session channel. Use `/send-session-dashboard` first.'
-                });
+    const userId = interaction.user.id;
+    let added;
 
-                return;
-            }
+    if (hasVoted(userId)) {
+        removeVote(userId);
+        added = false;
+    } else {
+        addVote(userId);
+        added = true;
+    }
 
-            startVote(target);
+    await interaction.reply({
+        content: added
+            ? 'Your vote has been added'
+            : 'Your vote has been removed',
+        flags: MessageFlags.Ephemeral
+    });
 
-            await updateSessionDashboardMessage(
-                dashboard,
-                getApiSnapshot()
-            );
+    await refreshSessionDashboard(interaction.client);
 
-            const voteMessage =
-                await channel.send({
-                    ...(await buildVoteAnnouncement(
-                        channel.guild
-                    )),
-                    reply: {
-                        messageReference:
-                            dashboard.id,
-                        failIfNotExists: false
-                    }
-                });
+    if (added && state.voters.size >= state.voteTarget) {
+        await completeVote(interaction.client);
+    }
 
-            setVoteMessageId(
-                voteMessage.id
-            );
+    return true;
+}
 
-            await interaction.editReply({
-                content:
-                    `✅ Session vote started. ${target} vote${target === 1 ? '' : 's'} required.`
-            });
+async function viewVoters(interaction) {
+    const state = getState();
 
-        } catch (error) {
-            console.error(
-                '[SESSION VOTE COMMAND ERROR]',
-                error
-            );
+    if (state.status !== 'vote') {
+        await interaction.reply({
+            content: 'There is no active session vote.',
+            flags: MessageFlags.Ephemeral
+        });
+        return true;
+    }
 
-            await interaction.editReply({
-                content:
-                    '❌ Failed to start the session vote.'
-            });
-        }
-    },
+    const tick = interaction.guild?.emojis?.cache?.find(emoji =>
+        ['white_tick', 'msrp_tick', 'tick'].includes(emoji.name?.toLowerCase())
+    );
 
-    buildVoteAnnouncement,
-    refreshVoteAnnouncement,
-    getMentionLine
+    const tickText = tick ? tick.toString() : '✅';
+    const voters = [...state.voters];
+
+    const content = voters.length
+        ? voters.map(id => `${tickText} - <@${id}>`).join('\n')
+        : 'No one has voted yet.';
+
+    await interaction.reply({
+        content,
+        flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] }
+    });
+
+    return true;
+}
+
+async function handleVoteButton(interaction) {
+    if (interaction.customId === 'session_vote') {
+        return toggleVote(interaction);
+    }
+
+    if (interaction.customId === 'session_view_voters') {
+        return viewVoters(interaction);
+    }
+
+    return false;
+}
+
+module.exports = {
+    data: command,
+    execute: beginVote,
+    handleVoteButton,
+    completeVote
 };

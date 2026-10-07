@@ -1558,7 +1558,7 @@ if (
 
     if (
         interaction.commandName ===
-        'start-session'
+        'session-vote'
     ) {
         await sessionVoteCommand.execute(
             interaction
