@@ -26,7 +26,7 @@ module.exports = {
     // Fallback values only. Melonly server info takes priority on the dashboard.
     serverName: 'Melbourne State Roleplay | Strict | VC | New',
     serverOwner:
-        '[Monkeyman443hi](https://www.roblox.com/users/3927928067/profile?friendshipSourceType=PlayerSearch)',
+        '[monkeyman443hi](https://www.roblox.com/users/3927928067/profile?friendshipSourceType=PlayerSearch)',
 
     dashboardRefreshMs: 30_000,
     refreshIntervalMs: 30_000,

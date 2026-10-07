@@ -126,7 +126,7 @@ async function getDashboardData() {
     };
 }
 
-async function buildSessionDashboard({ guild, liveData = null } = {}) {
+async function buildSessionDashboard({ guild, liveData = null, forceInactive = false } = {}) {
     const state = getState();
     const icons = await ensureSessionIcons(guild);
     const data = liveData || await getDashboardData();
@@ -136,36 +136,40 @@ async function buildSessionDashboard({ guild, liveData = null } = {}) {
     const updatedAt = data.updatedAt || Date.now();
     const updatedTimestamp = Math.floor(updatedAt / 1000);
     const isVoting = state.status === 'vote';
-    const isSessionActive = state.status === 'active' || state.status === 'shutting-down';
+    const isSessionActive = !forceInactive && (state.status === 'active' || state.status === 'shutting-down');
     const isOnline = data.bothOnline;
 
-    // Prefer Melonly if it supplies live values. At present its public
-    // server-info response may not include them, so ER:LC is used as a
-    // fallback once the ER:LC key is healthy.
-    const livePlayerCount = firstFinite(
-        data.melonly?.playerCount,
-        data.erlc?.playerCount
-    );
-    const liveQueueCount = firstFinite(
-        data.melonly?.queueCount,
-        data.erlc?.queueCount
-    );
-    const liveStaffCount = firstFinite(
-        data.melonly?.staffCount,
-        data.erlc?.staffCount
-    );
+    // Live players and queue now come ONLY from ER:LC. Melonly is not
+    // used for these counters. Staff is the number of Discord members
+    // who currently hold the configured staff role.
+    const livePlayerCount = firstFinite(data.erlc?.playerCount);
+    const liveQueueCount = firstFinite(data.erlc?.queueCount);
+
+    let liveStaffCount = null;
+    if (guild) {
+        try {
+            await guild.members.fetch();
+        } catch (error) {
+            console.warn('[SESSION STAFF COUNT] Could not refresh guild members:', error?.message || error);
+        }
+
+        const staffRole = guild.roles.cache.get(sessionConfig.staffRoleId);
+        liveStaffCount = staffRole ? staffRole.members.size : 0;
+    }
+
+    const erlcCountsOnline = Boolean(data.erlc?.ok);
 
     const playerCount = displayLiveCount(livePlayerCount, {
         sessionActive: isSessionActive,
-        apiOnline: isOnline
+        apiOnline: erlcCountsOnline
     });
     const queueCount = displayLiveCount(liveQueueCount, {
         sessionActive: isSessionActive,
-        apiOnline: isOnline
+        apiOnline: erlcCountsOnline
     });
     const staffCount = displayLiveCount(liveStaffCount, {
         sessionActive: isSessionActive,
-        apiOnline: isOnline
+        apiOnline: true
     });
 
     const maxPlayers = firstFinite(
@@ -267,9 +271,6 @@ async function buildSessionDashboard({ guild, liveData = null } = {}) {
         'Unavailable';
 
     const serverOwner =
-        melonlyInfo.ownerName ||
-        melonlyInfo.owner ||
-        melonlyInfo.ownerId ||
         sessionConfig.serverOwner ||
         'Unavailable';
 
@@ -311,7 +312,7 @@ async function buildSessionDashboard({ guild, liveData = null } = {}) {
             new ButtonBuilder()
                 .setCustomId('session_vote')
                 .setLabel(`Vote ${state.voters.size}/${state.voteTarget}`)
-                .setStyle(ButtonStyle.Secondary),
+                .setStyle(ButtonStyle.Success),
             icons.vote
         );
 
@@ -377,7 +378,8 @@ async function refreshSessionDashboard(client, options = {}) {
 
     const dashboard = await buildSessionDashboard({
         guild: channel.guild,
-        liveData
+        liveData,
+        forceInactive: Boolean(options.forceInactive)
     });
 
     await message.edit({

@@ -39,6 +39,8 @@ const state = {
     dashboardMessageId: runtime.dashboardMessageId || null,
     voteAnnouncementChannelId: null,
     voteAnnouncementMessageId: null,
+    sessionAnnouncementChannelId: null,
+    sessionAnnouncementMessageId: null,
 
     lastMelonlySnapshot: null,
     lastErlcHealth: null,
@@ -125,6 +127,16 @@ function clearVoteAnnouncement() {
     state.voteAnnouncementMessageId = null;
 }
 
+function setSessionAnnouncement(channelId, messageId) {
+    state.sessionAnnouncementChannelId = channelId;
+    state.sessionAnnouncementMessageId = messageId;
+}
+
+function clearSessionAnnouncement() {
+    state.sessionAnnouncementChannelId = null;
+    state.sessionAnnouncementMessageId = null;
+}
+
 function setApiSnapshot({ melonly, erlc, updatedAt = Date.now() }) {
     state.lastMelonlySnapshot = melonly;
     state.lastErlcHealth = erlc;
@@ -147,5 +159,7 @@ module.exports = {
     setDashboardMessage,
     setVoteAnnouncement,
     clearVoteAnnouncement,
+    setSessionAnnouncement,
+    clearSessionAnnouncement,
     setApiSnapshot
 };

@@ -16,7 +16,8 @@ const {
     hasVoted,
     startSession,
     setVoteAnnouncement,
-    clearVoteAnnouncement
+    clearVoteAnnouncement,
+    setSessionAnnouncement
 } = require('./sessionState');
 
 const {
@@ -222,7 +223,7 @@ async function completeVote(client) {
     const channel = await getAnnouncementChannel(client);
     const roleIds = sessionConfig.pingRoleIds || sessionConfig.announcementRoleIds || [];
 
-    await channel.send({
+    const startedMessage = await channel.send({
         components: [
             new TextDisplayBuilder().setContent(pingText()),
             buildStartedAnnouncement(channel.guild)
@@ -233,6 +234,8 @@ async function completeVote(client) {
             roles: roleIds
         }
     });
+
+    setSessionAnnouncement(channel.id, startedMessage.id);
 
     return true;
 }

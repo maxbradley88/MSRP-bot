@@ -1,6 +1,6 @@
 const API_URL =
-    'https://api.erlc.gg/v2/server?Players=true&Queue=true&Staff=true';
-    
+    'https://api.erlc.gg/v2/server?Players=true&Queue=true';
+
 function countCollection(value) {
     if (Array.isArray(value)) {
         return value.length;
@@ -125,6 +125,65 @@ async function getErlcHealth() {
     }
 }
 
+async function runErlcCommand(command) {
+    const rawKey = process.env.ERLC_SERVER_KEY;
+    const key = rawKey ? rawKey.trim() : '';
+
+    if (!key) {
+        throw new Error('ERLC_SERVER_KEY is not configured.');
+    }
+
+    const cleanCommand = String(command || '').trim();
+    if (!cleanCommand) {
+        throw new Error('An ER:LC command is required.');
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+
+    try {
+        const response = await fetch(
+            'https://api.erlc.gg/v2/server/command',
+            {
+                method: 'POST',
+                signal: controller.signal,
+                headers: {
+                    'Server-Key': key,
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ command: cleanCommand })
+            }
+        );
+
+        const text = await response.text();
+        let data = null;
+
+        if (text) {
+            try {
+                data = JSON.parse(text);
+            } catch {
+                data = text;
+            }
+        }
+
+        if (!response.ok) {
+            const detail =
+                typeof data === 'string'
+                    ? data.slice(0, 300)
+                    : data?.message || data?.error || `HTTP ${response.status}`;
+
+            throw new Error(`ER:LC command failed (${response.status}): ${detail}`);
+        }
+
+        console.log(`[ERLC COMMAND] ${cleanCommand} sent successfully.`);
+        return data;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
 module.exports = {
-    getErlcHealth
+    getErlcHealth,
+    runErlcCommand
 };
