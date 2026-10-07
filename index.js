@@ -67,6 +67,9 @@ const sessionTimesCommand =
 const sessionVoteCommand =
     require('./sessions/sessionVote');
 
+const sessionForceStartCommand =
+    require('./sessions/sessionForceStart');
+
 const sessionShutdownCommand =
     require('./sessions/sessionShutdown');
 
@@ -75,7 +78,8 @@ const {
 } = require('./sessions/sessionLockdown');
 
 const {
-    startDashboardAutoRefresh
+    startDashboardAutoRefresh,
+    refreshSessionDashboard
 } = require('./sessions/sessionDashboard');
 
 const {
@@ -1432,6 +1436,7 @@ body: [
     sessionDashboardCommand.data.toJSON(),
     sessionTimesCommand.data.toJSON(),
     sessionVoteCommand.data.toJSON(),
+    sessionForceStartCommand.data.toJSON(),
     sessionShutdownCommand.data.toJSON(),
     sessionShutdownCommand.forceData.toJSON(),
     reactionRole.command.toJSON()
@@ -1567,6 +1572,17 @@ if (
         'session-vote'
     ) {
         await sessionVoteCommand.execute(
+            interaction
+        );
+
+        return;
+    }
+
+    if (
+        interaction.commandName ===
+        'force-session'
+    ) {
+        await sessionForceStartCommand.execute(
             interaction
         );
 
@@ -3326,6 +3342,68 @@ if (
 
 );
 
+
+
+
+
+// ======================================================
+// GRACEFUL BOT STOP / RESTART
+// ======================================================
+
+let processShutdownStarted = false;
+
+async function handleProcessShutdown(signal) {
+    if (processShutdownStarted) {
+        return;
+    }
+
+    processShutdownStarted = true;
+
+    console.log(
+        `[BOT SHUTDOWN] ${signal} received. Marking the session dashboard offline...`
+    );
+
+    try {
+        if (client.isReady()) {
+            await refreshSessionDashboard(
+                client,
+                {
+                    preferCached: true,
+                    forceOffline: true
+                }
+            );
+
+            console.log(
+                '[BOT SHUTDOWN] Session dashboard marked offline.'
+            );
+        }
+    } catch (error) {
+        console.error(
+            '[BOT SHUTDOWN] Could not mark the session dashboard offline:',
+            error
+        );
+    }
+
+    try {
+        client.destroy();
+    } catch {}
+
+    process.exit(0);
+}
+
+process.once(
+    'SIGTERM',
+    () => {
+        void handleProcessShutdown('SIGTERM');
+    }
+);
+
+process.once(
+    'SIGINT',
+    () => {
+        void handleProcessShutdown('SIGINT');
+    }
+);
 
 
 // ======================================================

@@ -207,13 +207,7 @@ async function tryStartMelonlySession() {
     }
 }
 
-async function completeVote(client) {
-    const state = getState();
-
-    if (state.status !== 'vote' || state.voters.size < state.voteTarget) {
-        return false;
-    }
-
+async function startSessionNow(client) {
     // Best-effort only. Melonly currently does not expose a documented public
     // start-session endpoint, so failure no longer blocks the Discord session.
     await tryStartMelonlySession();
@@ -224,7 +218,8 @@ async function completeVote(client) {
     // removes the previous one-hour shutdown notice if it still exists.
     await removeShutdownAnnouncement(client).catch(() => {});
 
-    // Remove the old vote announcement and vote controls first.
+    // If a force-start happens while a vote is running, remove the old vote
+    // announcement and its dashboard controls too.
     await deleteVoteAnnouncement(client);
     await refreshSessionDashboard(client, { preferCached: true });
 
@@ -246,6 +241,16 @@ async function completeVote(client) {
     setSessionAnnouncement(channel.id, startedMessage.id);
 
     return true;
+}
+
+async function completeVote(client) {
+    const state = getState();
+
+    if (state.status !== 'vote' || state.voters.size < state.voteTarget) {
+        return false;
+    }
+
+    return startSessionNow(client);
 }
 
 async function toggleVote(interaction) {
@@ -336,5 +341,6 @@ module.exports = {
     execute: beginVote,
     handleVoteButton,
     completeVote,
+    startSessionNow,
     deleteVoteAnnouncement
 };

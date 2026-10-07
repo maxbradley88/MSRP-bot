@@ -126,7 +126,7 @@ async function getDashboardData() {
     };
 }
 
-async function buildSessionDashboard({ guild, liveData = null, forceInactive = false } = {}) {
+async function buildSessionDashboard({ guild, liveData = null, forceInactive = false, forceOffline = false } = {}) {
     const state = getState();
     const icons = await ensureSessionIcons(guild);
     const data = liveData || await getDashboardData();
@@ -137,7 +137,7 @@ async function buildSessionDashboard({ guild, liveData = null, forceInactive = f
     const updatedTimestamp = Math.floor(updatedAt / 1000);
     const isVoting = state.status === 'vote';
     const isSessionActive = !forceInactive && (state.status === 'active' || state.status === 'shutting-down');
-    const isOnline = Boolean(data.erlc?.ok);
+    const isOnline = !forceOffline && Boolean(data.erlc?.ok);
 
     // Live players and queue now come ONLY from ER:LC. Melonly is not
     // used for these counters. Staff is the number of Discord members
@@ -146,7 +146,7 @@ async function buildSessionDashboard({ guild, liveData = null, forceInactive = f
     const liveQueueCount = firstFinite(data.erlc?.queueCount);
 
     let liveStaffCount = null;
-    if (guild) {
+    if (guild && !forceOffline) {
         try {
             await guild.members.fetch();
         } catch (error) {
@@ -157,7 +157,7 @@ async function buildSessionDashboard({ guild, liveData = null, forceInactive = f
         liveStaffCount = staffRole ? staffRole.members.size : 0;
     }
 
-    const erlcCountsOnline = Boolean(data.erlc?.ok);
+    const erlcCountsOnline = !forceOffline && Boolean(data.erlc?.ok);
 
     const playerCount = displayLiveCount(livePlayerCount, {
         sessionActive: isSessionActive,
@@ -169,7 +169,7 @@ async function buildSessionDashboard({ guild, liveData = null, forceInactive = f
     });
     const staffCount = displayLiveCount(liveStaffCount, {
         sessionActive: isSessionActive,
-        apiOnline: true
+        apiOnline: !forceOffline
     });
 
     const maxPlayers = firstFinite(
@@ -379,7 +379,8 @@ async function refreshSessionDashboard(client, options = {}) {
     const dashboard = await buildSessionDashboard({
         guild: channel.guild,
         liveData,
-        forceInactive: Boolean(options.forceInactive)
+        forceInactive: Boolean(options.forceInactive),
+        forceOffline: Boolean(options.forceOffline)
     });
 
     await message.edit({
