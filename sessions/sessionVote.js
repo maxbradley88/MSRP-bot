@@ -2,6 +2,8 @@ const {
     SlashCommandBuilder,
     ContainerBuilder,
     TextDisplayBuilder,
+    SeparatorBuilder,
+    SeparatorSpacingSize,
     MessageFlags
 } = require('discord.js');
 
@@ -37,33 +39,69 @@ const command = new SlashCommandBuilder()
             .setMaxValue(50)
     );
 
-function pingText() {
-    return `@here ${sessionConfig.pingRoleIds.map(id => `<@&${id}>`).join(' ')}`;
+function divider() {
+    return new SeparatorBuilder()
+        .setSpacing(SeparatorSpacingSize.Small)
+        .setDivider(true);
 }
 
-function buildVoteAnnouncement() {
+function pingText() {
+    const roleIds = sessionConfig.pingRoleIds || sessionConfig.announcementRoleIds || [];
+    return `@here ${roleIds.map(id => `<@&${id}>`).join(' ')}`.trim();
+}
+
+function findEmoji(guild, names) {
+    return guild?.emojis?.cache?.find(emoji =>
+        names.includes(emoji.name?.toLowerCase())
+    ) || null;
+}
+
+function buildVoteAnnouncement(guild, target) {
+    const voteEmoji = findEmoji(guild, ['msrp_vote', 'vote']);
+    const icon = voteEmoji ? `${voteEmoji} ` : '';
+
     return new ContainerBuilder()
+        .setAccentColor(0x5865F2)
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                '## A session vote has been started!\n' +
-                'Use the button on the Sessions Dashboard to cast your vote. Once the goal is reached, a session will start.'
+                `## ${icon}Session Vote\n` +
+                '**A session vote has been started!**\n\n' +
+                'Use the **Vote** button on the Sessions Dashboard to cast or remove your vote. ' +
+                'Once the goal is reached, the session will automatically open.\n\n' +
+                `**Vote goal:** ${target}`
+            )
+        )
+        .addSeparatorComponents(divider())
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                '-# Your vote can be changed at any time before the goal is reached.'
             )
         );
 }
 
-function buildStartedAnnouncement() {
+function buildStartedAnnouncement(guild) {
+    const logoEmoji = findEmoji(guild, ['logo']);
+    const icon = logoEmoji ? `${logoEmoji} ` : '';
+
     return new ContainerBuilder()
+        .setAccentColor(0x57F287)
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                '## A session has started!\n' +
-                `Join using the button on the Sessions Dashboard or use code: **${sessionConfig.fallbackJoinCode}**.`
+                `## ${icon}Session Started\n` +
+                '**A session has started!**\n\n' +
+                'Join using the **Join** button on the Sessions Dashboard, or use the server code below.\n\n' +
+                `**Server code:** \`${sessionConfig.fallbackJoinCode || sessionConfig.serverCode}\``
             )
         );
 }
 
 async function getAnnouncementChannel(client) {
+    const channelId =
+        sessionConfig.announcementChannelId ||
+        sessionConfig.sessionChannelId;
+
     const channel = await client.channels
-        .fetch(sessionConfig.announcementChannelId)
+        .fetch(channelId)
         .catch(() => null);
 
     if (!channel?.isTextBased()) {
@@ -77,6 +115,7 @@ async function deleteVoteAnnouncement(client) {
     const state = getState();
 
     if (!state.voteAnnouncementChannelId || !state.voteAnnouncementMessageId) {
+        clearVoteAnnouncement();
         return;
     }
 
@@ -121,25 +160,46 @@ async function beginVote(interaction) {
     startVote(target);
 
     const channel = await getAnnouncementChannel(interaction.client);
+    const roleIds = sessionConfig.pingRoleIds || sessionConfig.announcementRoleIds || [];
 
     const message = await channel.send({
         components: [
             new TextDisplayBuilder().setContent(pingText()),
-            buildVoteAnnouncement()
+            buildVoteAnnouncement(channel.guild, target)
         ],
         flags: MessageFlags.IsComponentsV2,
         allowedMentions: {
             parse: ['everyone'],
-            roles: sessionConfig.pingRoleIds
+            roles: roleIds
         }
     });
 
     setVoteAnnouncement(channel.id, message.id);
-    await refreshSessionDashboard(interaction.client);
+
+    // Use cached API values here so the vote controls appear immediately.
+    await refreshSessionDashboard(interaction.client, { preferCached: true });
 
     await interaction.editReply({
         content: `✅ Session vote started. Goal: ${target} vote${target === 1 ? '' : 's'}.`
     });
+}
+
+async function tryStartMelonlySession() {
+    if (!sessionConfig.attemptMelonlyStart) {
+        return false;
+    }
+
+    try {
+        await startMelonlySession();
+        console.log('[MELONLY SESSION] Session start request succeeded.');
+        return true;
+    } catch (error) {
+        console.warn(
+            '[MELONLY SESSION] Could not start Melonly session; continuing with Discord session:',
+            error?.message || error
+        );
+        return false;
+    }
 }
 
 async function completeVote(client) {
@@ -149,43 +209,28 @@ async function completeVote(client) {
         return false;
     }
 
-    try {
-        /*
-         * Melonly MUST start successfully before we unlock Join or send the
-         * session-start ping. If this throws, the vote remains active.
-         */
-        await startMelonlySession();
-    } catch (error) {
-        console.error('[MELONLY SESSION START ERROR]', error);
-
-        const channel = await getAnnouncementChannel(client).catch(() => null);
-        if (channel) {
-            await channel.send({
-                content:
-                    '❌ The vote goal was reached, but the bot could not start the session on Melonly. ' +
-                    'The Join button has not been unlocked.\n' +
-                    `Reason: ${error.message}`
-            });
-        }
-
-        return false;
-    }
+    // Best-effort only. Melonly currently does not expose a documented public
+    // start-session endpoint, so failure no longer blocks the Discord session.
+    await tryStartMelonlySession();
 
     startSession();
+
+    // Remove the old vote announcement and vote controls first.
     await deleteVoteAnnouncement(client);
-    await refreshSessionDashboard(client);
+    await refreshSessionDashboard(client, { preferCached: true });
 
     const channel = await getAnnouncementChannel(client);
+    const roleIds = sessionConfig.pingRoleIds || sessionConfig.announcementRoleIds || [];
 
     await channel.send({
         components: [
             new TextDisplayBuilder().setContent(pingText()),
-            buildStartedAnnouncement()
+            buildStartedAnnouncement(channel.guild)
         ],
         flags: MessageFlags.IsComponentsV2,
         allowedMentions: {
             parse: ['everyone'],
-            roles: sessionConfig.pingRoleIds
+            roles: roleIds
         }
     });
 
@@ -214,6 +259,7 @@ async function toggleVote(interaction) {
         added = true;
     }
 
+    // Reply first so Discord instantly acknowledges the click.
     await interaction.reply({
         content: added
             ? 'Your vote has been added'
@@ -221,7 +267,8 @@ async function toggleVote(interaction) {
         flags: MessageFlags.Ephemeral
     });
 
-    await refreshSessionDashboard(interaction.client);
+    // Fast state-only refresh; no API round trip here.
+    await refreshSessionDashboard(interaction.client, { preferCached: true });
 
     if (added && state.voters.size >= state.voteTarget) {
         await completeVote(interaction.client);
@@ -277,5 +324,6 @@ module.exports = {
     data: command,
     execute: beginVote,
     handleVoteButton,
-    completeVote
+    completeVote,
+    deleteVoteAnnouncement
 };

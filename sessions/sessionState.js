@@ -1,3 +1,32 @@
+const fs = require('fs');
+const path = require('path');
+
+const runtimePath = path.join(__dirname, 'sessionRuntimeData.json');
+
+function loadRuntime() {
+    try {
+        return JSON.parse(fs.readFileSync(runtimePath, 'utf8'));
+    } catch {
+        return {};
+    }
+}
+
+function saveRuntime() {
+    try {
+        fs.writeFileSync(
+            runtimePath,
+            JSON.stringify({
+                dashboardChannelId: state.dashboardChannelId,
+                dashboardMessageId: state.dashboardMessageId
+            }, null, 2)
+        );
+    } catch (error) {
+        console.error('[SESSION RUNTIME SAVE ERROR]', error);
+    }
+}
+
+const runtime = loadRuntime();
+
 const state = {
     status: 'offline',
     voteTarget: 0,
@@ -5,8 +34,15 @@ const state = {
     startedAt: null,
     emptySince: null,
     shuttingDown: false,
-    dashboardMessageId: null,
-    voteMessageId: null
+
+    dashboardChannelId: runtime.dashboardChannelId || null,
+    dashboardMessageId: runtime.dashboardMessageId || null,
+    voteAnnouncementChannelId: null,
+    voteAnnouncementMessageId: null,
+
+    lastMelonlySnapshot: null,
+    lastErlcHealth: null,
+    lastUpdatedAt: null
 };
 
 function getState() {
@@ -24,7 +60,6 @@ function startVote(target) {
     state.startedAt = null;
     state.emptySince = null;
     state.shuttingDown = false;
-    state.voteMessageId = null;
 }
 
 function addVote(userId) {
@@ -43,10 +78,6 @@ function getVoteCount() {
     return state.voters.size;
 }
 
-function getVoters() {
-    return [...state.voters];
-}
-
 function startSession() {
     state.status = 'active';
     state.startedAt = Date.now();
@@ -54,7 +85,6 @@ function startSession() {
     state.voters.clear();
     state.emptySince = null;
     state.shuttingDown = false;
-    state.voteMessageId = null;
 }
 
 function startShutdown() {
@@ -69,7 +99,6 @@ function stopSession() {
     state.voters.clear();
     state.emptySince = null;
     state.shuttingDown = false;
-    state.voteMessageId = null;
 }
 
 function setEmptySince(timestamp) {
@@ -80,12 +109,26 @@ function clearEmptySince() {
     state.emptySince = null;
 }
 
-function setDashboardMessageId(messageId) {
-    state.dashboardMessageId = messageId || null;
+function setDashboardMessage(channelId, messageId) {
+    state.dashboardChannelId = channelId;
+    state.dashboardMessageId = messageId;
+    saveRuntime();
 }
 
-function setVoteMessageId(messageId) {
-    state.voteMessageId = messageId || null;
+function setVoteAnnouncement(channelId, messageId) {
+    state.voteAnnouncementChannelId = channelId;
+    state.voteAnnouncementMessageId = messageId;
+}
+
+function clearVoteAnnouncement() {
+    state.voteAnnouncementChannelId = null;
+    state.voteAnnouncementMessageId = null;
+}
+
+function setApiSnapshot({ melonly, erlc, updatedAt = Date.now() }) {
+    state.lastMelonlySnapshot = melonly;
+    state.lastErlcHealth = erlc;
+    state.lastUpdatedAt = updatedAt;
 }
 
 module.exports = {
@@ -96,12 +139,13 @@ module.exports = {
     removeVote,
     hasVoted,
     getVoteCount,
-    getVoters,
     startSession,
     startShutdown,
     stopSession,
     setEmptySince,
     clearEmptySince,
-    setDashboardMessageId,
-    setVoteMessageId
+    setDashboardMessage,
+    setVoteAnnouncement,
+    clearVoteAnnouncement,
+    setApiSnapshot
 };

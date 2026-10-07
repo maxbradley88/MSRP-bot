@@ -1,4 +1,3 @@
-require('dotenv').config({ path: '.env.local' });
 require('dotenv').config();
 
 
@@ -68,13 +67,15 @@ const sessionTimesCommand =
 const sessionVoteCommand =
     require('./sessions/sessionVote');
 
+const sessionShutdownCommand =
+    require('./sessions/sessionShutdown');
+
 const {
-    startSessionDashboardUpdater
+    startDashboardAutoRefresh
 } = require('./sessions/sessionDashboard');
 
 const {
-    handleSessionButton,
-    handleSessionModal
+    handleSessionButton
 } = require('./sessions/sessionButtons');
 
 
@@ -1322,11 +1323,6 @@ client.once(
         );
 
 
-        startSessionDashboardUpdater(
-            client
-        );
-
-
 
         const rest =
 
@@ -1413,16 +1409,7 @@ client.once(
 
         try {
 
-console.log(
-    'COMMANDS BEING SENT TO DISCORD:',
-    [
-        sendTicketDashboardCommand.toJSON(),
-        sessionDashboardCommand.data.toJSON(),
-        sessionTimesCommand.data.toJSON(),
-        sessionVoteCommand.data.toJSON(),
-        reactionRole.command.toJSON()
-    ].map(cmd => cmd.name)
-);
+
 
             await rest.put(
 
@@ -1441,6 +1428,7 @@ body: [
     sessionDashboardCommand.data.toJSON(),
     sessionTimesCommand.data.toJSON(),
     sessionVoteCommand.data.toJSON(),
+    sessionShutdownCommand.data.toJSON(),
     reactionRole.command.toJSON()
 ]
 
@@ -1455,6 +1443,8 @@ body: [
                 'Slash commands registered.'
 
             );
+
+            startDashboardAutoRefresh(client);
 
 
 
@@ -1520,7 +1510,7 @@ if (
     }
 
 
-    
+
     if (
     interaction.commandName ===
     'reaction-role-message'
@@ -1576,22 +1566,41 @@ if (
         return;
     }
 
+    if (
+        interaction.commandName ===
+        'session-shutdown'
+    ) {
+        await sessionShutdownCommand.execute(
+            interaction
+        );
+
+        return;
+    }
+
     return;
 }
 
 
-            // ==================================================
-            // SESSION MODALS
-            // ==================================================
+client.on(
+    'messageReactionAdd',
+    async (reaction, user) => {
+        await reactionRole.handleReactionAdd(
+            reaction,
+            user
+        );
+    }
+);
 
-            if (
-                await handleSessionModal(
-                    interaction
-                )
-            ) {
-                return;
-            }
 
+client.on(
+    'messageReactionRemove',
+    async (reaction, user) => {
+        await reactionRole.handleReactionRemove(
+            reaction,
+            user
+        );
+    }
+);
 
             // ==================================================
             // HAND OFF MODULE
@@ -2509,7 +2518,32 @@ if (
 ) {
 
     
+if (
+    interaction.customId.startsWith(
+        'reaction_role_dismiss:'
+    )
+) {
+    const ownerId =
+        interaction.customId.split(':')[1];
 
+    if (
+        interaction.user.id !== ownerId
+    ) {
+        await interaction.reply({
+            content:
+                '❌ You cannot dismiss someone else’s message.',
+            flags:
+                MessageFlags.Ephemeral
+        });
+
+        return;
+    }
+
+    await interaction.message.delete()
+        .catch(() => {});
+
+    return;
+}
     const handledSessionButton =
         await handleSessionButton(
             interaction
@@ -3275,32 +3309,6 @@ if (
 );
 
 
-
-
-// ======================================================
-// REACTION ROLE EVENTS
-// ======================================================
-
-client.on(
-    'messageReactionAdd',
-    async (reaction, user) => {
-        await reactionRole.handleReactionAdd(
-            reaction,
-            user
-        );
-    }
-);
-
-
-client.on(
-    'messageReactionRemove',
-    async (reaction, user) => {
-        await reactionRole.handleReactionRemove(
-            reaction,
-            user
-        );
-    }
-);
 
 // ======================================================
 

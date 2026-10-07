@@ -39,14 +39,18 @@ const commandPermissions = {
     ],
 
     'reaction-role-message': [
-    '1547525713853288448'
-],
+        '1547525713853288448'
+    ],
 
     'session-vote': [
-    '1548126738876342272'
-],
+        '1548126738876342272'
+    ],
 
+    'session-shutdown': [
+        '1548126738876342272'
+    ]
 };
+
 
 
 /*
@@ -75,9 +79,19 @@ const settings = {
  * ======================================================
  */
 
-async function canUseCommand(interaction) {
-    const commandName = interaction.commandName;
+function canUseCommand(
+    interaction
+) {
+    const commandName =
+        interaction.commandName;
 
+    /*
+     * If the command isn't in the permissions
+     * file yet, block it.
+     *
+     * This means we don't accidentally create
+     * unrestricted staff commands.
+     */
     if (
         !Object.prototype.hasOwnProperty.call(
             commandPermissions,
@@ -91,13 +105,26 @@ async function canUseCommand(interaction) {
         return false;
     }
 
-    const allowedRoles =
-        commandPermissions[commandName];
 
-    if (allowedRoles.length === 0) {
+    const allowedRoles =
+        commandPermissions[
+            commandName
+        ];
+
+
+    /*
+     * Empty role list = everyone allowed.
+     */
+    if (
+        allowedRoles.length === 0
+    ) {
         return true;
     }
 
+
+    /*
+     * Administrator bypass.
+     */
     if (
         settings.administratorsBypass &&
         interaction.memberPermissions?.has(
@@ -107,78 +134,26 @@ async function canUseCommand(interaction) {
         return true;
     }
 
-    let member = interaction.member;
 
-    try {
-        member =
-            await interaction.guild.members.fetch(
-                interaction.user.id
-            );
-    } catch (error) {
-        console.error(
-            '[COMMAND PERMISSIONS] Member fetch failed:',
-            error
-        );
+    /*
+     * Check whether the member has
+     * at least one allowed role.
+     */
+    const memberRoles =
+        interaction.member?.roles?.cache;
+
+    if (!memberRoles) {
+        return false;
     }
 
-    let memberRoleIds = [];
 
-    // Normal discord.js GuildMember
-    if (member?.roles?.cache) {
-        memberRoleIds =
-            [...member.roles.cache.keys()];
-    }
-
-    // Fallback for raw interaction member data
-    else if (Array.isArray(member?.roles)) {
-        memberRoleIds =
-            member.roles;
-    }
-
-    console.log(
-        '========== COMMAND PERMISSION DEBUG =========='
+    return allowedRoles.some(
+        roleId =>
+            memberRoles.has(
+                roleId
+            )
     );
-
-    console.log(
-        'Command:',
-        commandName
-    );
-
-    console.log(
-        'User:',
-        interaction.user.tag,
-        interaction.user.id
-    );
-
-    console.log(
-        'Allowed role IDs:',
-        allowedRoles
-    );
-
-    console.log(
-        'Member role IDs:',
-        memberRoleIds
-    );
-
-    const allowed =
-        allowedRoles.some(
-            roleId =>
-                memberRoleIds.includes(roleId)
-        );
-
-    console.log(
-        'Allowed:',
-        allowed
-    );
-
-    console.log(
-        '=============================================='
-    );
-
-    return allowed;
 }
-
-
 
 
 /*
@@ -187,18 +162,17 @@ async function canUseCommand(interaction) {
  * ======================================================
  */
 
-
 async function checkCommandPermission(
     interaction
 ) {
-    const allowed =
-        await canUseCommand(
+    if (
+        canUseCommand(
             interaction
-        );
-
-    if (allowed) {
+        )
+    ) {
         return true;
     }
+
 
     await interaction.reply({
         content:
@@ -207,6 +181,7 @@ async function checkCommandPermission(
         flags:
             MessageFlags.Ephemeral
     });
+
 
     return false;
 }

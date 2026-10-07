@@ -85,6 +85,21 @@ const ICONS = {
         `
     },
 
+
+
+    tick: {
+        name: 'msrp_tick',
+        svg: `
+            <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+                <path d="M28 67l23 23 49-54"
+                    fill="none"
+                    stroke="white"
+                    stroke-width="10"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"/>
+            </svg>
+        `
+    },
     vote: {
         name: 'msrp_vote',
         svg: `
@@ -137,6 +152,7 @@ async function ensureSessionIcons(guild) {
             queue: null,
             join: null,
             vote: null,
+            tick: null,
             logo: null
         };
     }

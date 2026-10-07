@@ -1,13 +1,18 @@
 const BASE_URL = 'https://api.melonly.xyz/api/v1';
 
 function getToken() {
-    const token = process.env.MELONY_API_KEY || process.env.MELONLY_API_KEY;
+    const token =
+        process.env.MELONLY_API_TOKEN ||
+        process.env.MELONLY_API_KEY ||
+        process.env.MELONY_API_KEY;
 
     if (!token) {
-        throw new Error('MELONY_API_KEY is not configured.');
+        throw new Error(
+            'Melonly token is not configured. Use MELONLY_API_TOKEN (or MELONLY_API_KEY).'
+        );
     }
 
-    return token;
+    return token.trim();
 }
 
 async function melonlyRequest(path, options = {}) {
@@ -38,10 +43,13 @@ async function melonlyRequest(path, options = {}) {
         }
 
         if (!response.ok) {
+            const detail =
+                typeof body === 'string'
+                    ? body.slice(0, 300)
+                    : body?.error || body?.message || '';
+
             throw new Error(
-                `Melonly API returned HTTP ${response.status}${
-                    body?.error ? `: ${body.error}` : ''
-                }`
+                `Melonly API returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`
             );
         }
 
@@ -61,11 +69,6 @@ function asCount(value) {
     return null;
 }
 
-/*
- * Melonly's published API currently documents /server/info with
- * name/joinCode/ownerId metadata. Some deployments may return additional
- * ER:LC live fields. We read those fields when present without inventing data.
- */
 function extractLiveStats(info) {
     const playerCount =
         asCount(info?.playerCount) ??
@@ -105,13 +108,10 @@ async function getMelonlySnapshot() {
     };
 }
 
-/*
- * IMPORTANT:
- * The public Melonly API/client currently does not publish a documented
- * endpoint for starting a Melonly session. This function intentionally fails
- * instead of guessing an endpoint and falsely unlocking the Discord session.
- */
 async function startMelonlySession() {
+    // There is currently no documented public Melonly endpoint for starting
+    // a session. Keep this isolated so it can be replaced if Melonly provides
+    // the correct endpoint later.
     throw new Error(
         'Melonly does not currently publish a documented public API endpoint for starting a session.'
     );

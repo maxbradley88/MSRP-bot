@@ -16,7 +16,8 @@ const {
 
 const {
     getState,
-    setDashboardMessageId
+    setDashboardMessage,
+    setApiSnapshot
 } = require('./sessionState');
 
 const {
@@ -25,41 +26,23 @@ const {
 } = require('./sessionIcons');
 
 const {
-    getApiSnapshot,
-    fetchErlcSnapshot
+    getMelonlySnapshot
+} = require('./melonlyApi');
+
+const {
+    getErlcHealth
 } = require('./erlcApi');
 
-const sessionConfig =
-    require('./sessionConfig');
-
+const sessionConfig = require('./sessionConfig');
 
 function divider() {
     return new SeparatorBuilder()
-        .setSpacing(
-            SeparatorSpacingSize.Small
-        )
+        .setSpacing(SeparatorSpacingSize.Small)
         .setDivider(true);
 }
 
-
-function getStaffCount(guild) {
-    if (!guild) {
-        return 0;
-    }
-
-    return guild.members.cache.filter(
-        member =>
-            member.roles.cache.has(
-                sessionConfig.staffRoleId
-            ) &&
-            !member.user.bot
-    ).size;
-}
-
-
 function applyEmoji(button, emoji) {
-    const formatted =
-        buttonEmoji(emoji);
+    const formatted = buttonEmoji(emoji);
 
     if (formatted) {
         button.setEmoji(formatted);
@@ -68,501 +51,323 @@ function applyEmoji(button, emoji) {
     return button;
 }
 
+function displayCount(value) {
+    return Number.isFinite(value) ? value : '—';
+}
 
-function getAttachmentUrls(message) {
-    if (!message) {
-        return {};
-    }
-
-    const top =
-        message.attachments.find(
-            item =>
-                item.name ===
-                'session-dashboard.png'
-        );
-
-    const bottom =
-        message.attachments.find(
-            item =>
-                item.name ===
-                'session-footer.png'
-        );
+function getCachedDashboardData() {
+    const state = getState();
+    const melonly = state.lastMelonlySnapshot || {
+        ok: false,
+        info: {},
+        playerCount: null,
+        queueCount: null,
+        staffCount: null
+    };
+    const erlc = state.lastErlcHealth || { ok: false };
 
     return {
-        top: top?.url || null,
-        bottom: bottom?.url || null
+        melonly,
+        erlc,
+        bothOnline: Boolean(melonly.ok && erlc.ok),
+        updatedAt: state.lastUpdatedAt || Date.now()
     };
 }
 
+async function getDashboardData() {
+    const [melonlyResult, erlcResult] = await Promise.allSettled([
+        getMelonlySnapshot(),
+        getErlcHealth()
+    ]);
 
-async function buildSessionDashboard({
-    guild,
-    apiSnapshot = getApiSnapshot(),
-    attachmentUrls = {}
-}) {
+    const melonly = melonlyResult.status === 'fulfilled'
+        ? melonlyResult.value
+        : {
+            ok: false,
+            error: melonlyResult.reason?.message || 'Melonly request failed.'
+        };
+
+    const erlc = erlcResult.status === 'fulfilled'
+        ? erlcResult.value
+        : {
+            ok: false,
+            error: erlcResult.reason?.message || 'ER:LC request failed.'
+        };
+
+    const updatedAt = Date.now();
+
+    setApiSnapshot({
+        melonly,
+        erlc,
+        updatedAt
+    });
+
+    return {
+        melonly,
+        erlc,
+        bothOnline: Boolean(melonly.ok && erlc.ok),
+        updatedAt
+    };
+}
+
+async function buildSessionDashboard({ guild, liveData = null } = {}) {
     const state = getState();
+    const icons = await ensureSessionIcons(guild);
+    const data = liveData || await getDashboardData();
 
-    const icons =
-        await ensureSessionIcons(guild);
+    const melonlyInfo = data.melonly?.info || {};
+    const playerCount = displayCount(data.melonly?.playerCount);
+    const queueCount = displayCount(data.melonly?.queueCount);
+    const staffCount = displayCount(data.melonly?.staffCount);
 
-    const staffCount =
-        getStaffCount(guild);
+    const updatedAt = data.updatedAt || Date.now();
+    const updatedTimestamp = Math.floor(updatedAt / 1000);
+    const isVoting = state.status === 'vote';
+    const isSessionActive = state.status === 'active' || state.status === 'shutting-down';
+    const isOnline = data.bothOnline;
 
-    const now =
-        Math.floor(Date.now() / 1000);
+    const logoEmoji = icons.logo ? icons.logo.toString() : '';
 
-    const sessionActive =
-        state.status === 'active' ||
-        state.status === 'shutting-down';
+    const topImage = new AttachmentBuilder(
+        path.join(__dirname, '..', 'images', 'ticket-dashboard.png'),
+        { name: 'session-dashboard.png' }
+    );
 
-    const isVoting =
-        state.status === 'vote';
+    const bottomImage = new AttachmentBuilder(
+        path.join(__dirname, '..', 'images', 'image.png'),
+        { name: 'session-footer.png' }
+    );
 
-    const logoEmoji =
-        icons.logo
-            ? icons.logo.toString()
-            : '';
+    const sessionTimesButton = applyEmoji(
+        new ButtonBuilder()
+            .setCustomId('session_times')
+            .setLabel('Session Times')
+            .setStyle(ButtonStyle.Secondary),
+        icons.sessionTimes
+    );
 
-    const files = [];
+    const statusButton = applyEmoji(
+        new ButtonBuilder()
+            .setCustomId('session_status')
+            .setLabel(isOnline ? 'Online' : 'Offline')
+            .setStyle(isOnline ? ButtonStyle.Success : ButtonStyle.Danger)
+            .setDisabled(!isOnline),
+        icons.status
+    );
 
-    let topUrl =
-        attachmentUrls.top;
+    const playerButton = applyEmoji(
+        new ButtonBuilder()
+            .setCustomId('session_player_count')
+            .setLabel(`Player count: ${playerCount}/${sessionConfig.maxPlayers}`)
+            .setStyle(isSessionActive ? ButtonStyle.Primary : ButtonStyle.Secondary)
+            .setDisabled(!isSessionActive),
+        icons.players
+    );
 
-    let bottomUrl =
-        attachmentUrls.bottom;
+    const staffButton = applyEmoji(
+        new ButtonBuilder()
+            .setCustomId('session_staff_count')
+            .setLabel(`Staff: ${staffCount}`)
+            .setStyle(isSessionActive ? ButtonStyle.Danger : ButtonStyle.Secondary)
+            .setDisabled(!isSessionActive),
+        icons.staff
+    );
 
-    if (!topUrl) {
-        files.push(
-            new AttachmentBuilder(
-                path.join(
-                    __dirname,
-                    '..',
-                    'images',
-                    'ticket-dashboard.png'
-                ),
-                {
-                    name: 'session-dashboard.png'
-                }
-            )
+    const queueButton = applyEmoji(
+        new ButtonBuilder()
+            .setCustomId('session_queue_count')
+            .setLabel(`Queue: ${queueCount}`)
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(!isSessionActive),
+        icons.queue
+    );
+
+    let joinButton;
+
+    if (isSessionActive) {
+        // Discord link buttons always use the Link style. They cannot be green,
+        // but this is now a direct one-click ER:LC link with no rules form.
+        joinButton = applyEmoji(
+            new ButtonBuilder()
+                .setLabel('Join')
+                .setStyle(ButtonStyle.Link)
+                .setURL(sessionConfig.joinUrl),
+            icons.join
         );
-
-        topUrl =
-            'attachment://session-dashboard.png';
+    } else {
+        joinButton = applyEmoji(
+            new ButtonBuilder()
+                .setCustomId('session_join_disabled')
+                .setLabel('Join')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(true),
+            icons.join
+        );
     }
 
-    if (!bottomUrl) {
-        files.push(
-            new AttachmentBuilder(
-                path.join(
-                    __dirname,
-                    '..',
-                    'images',
-                    'image.png'
-                ),
-                {
-                    name: 'session-footer.png'
-                }
+    const informationRow = new ActionRowBuilder()
+        .addComponents(
+            playerButton,
+            staffButton,
+            queueButton,
+            joinButton
+        );
+
+    const serverName =
+        melonlyInfo.name ||
+        melonlyInfo.serverName ||
+        sessionConfig.serverName ||
+        'Unavailable';
+
+    const serverOwner =
+        melonlyInfo.ownerName ||
+        melonlyInfo.owner ||
+        melonlyInfo.ownerId ||
+        sessionConfig.serverOwner ||
+        'Unavailable';
+
+    const serverCode =
+        melonlyInfo.joinCode ||
+        melonlyInfo.code ||
+        sessionConfig.fallbackJoinCode;
+
+    const container = new ContainerBuilder()
+        .addMediaGalleryComponents(
+            new MediaGalleryBuilder().addItems(
+                new MediaGalleryItemBuilder().setURL('attachment://session-dashboard.png')
             )
-        );
-
-        bottomUrl =
-            'attachment://session-footer.png';
-    }
-
-    const sessionTimesButton =
-        applyEmoji(
-            new ButtonBuilder()
-                .setCustomId('session_times')
-                .setLabel('Session Times')
-                .setStyle(ButtonStyle.Secondary),
-            icons.sessionTimes
-        );
-
-    const statusButton =
-        applyEmoji(
-            new ButtonBuilder()
-                .setCustomId('session_status')
-                .setLabel(
-                    apiSnapshot.apiOnline
-                        ? 'Online'
-                        : 'Offline'
-                )
-                .setStyle(
-                    apiSnapshot.apiOnline
-                        ? ButtonStyle.Success
-                        : ButtonStyle.Danger
-                )
-                .setDisabled(true),
-            icons.status
-        );
-
-    const playerButton =
-        applyEmoji(
-            new ButtonBuilder()
-                .setCustomId(
-                    'session_player_count'
-                )
-                .setLabel(
-                    `Player count: ${apiSnapshot.playerCount}/${apiSnapshot.maxPlayers || 50}`
-                )
-                .setStyle(
-                    sessionActive
-                        ? ButtonStyle.Primary
-                        : ButtonStyle.Secondary
-                )
-                .setDisabled(true),
-            icons.players
-        );
-
-    const staffButton =
-        applyEmoji(
-            new ButtonBuilder()
-                .setCustomId(
-                    'session_staff_count'
-                )
-                .setLabel(
-                    `Staff: ${staffCount}`
-                )
-                .setStyle(
-                    sessionActive
-                        ? ButtonStyle.Danger
-                        : ButtonStyle.Secondary
-                )
-                .setDisabled(true),
-            icons.staff
-        );
-
-    const queueButton =
-        applyEmoji(
-            new ButtonBuilder()
-                .setCustomId(
-                    'session_queue_count'
-                )
-                .setLabel(
-                    `Queue: ${apiSnapshot.queueCount}`
-                )
-                .setStyle(
-                    ButtonStyle.Secondary
-                )
-                .setDisabled(true),
-            icons.queue
-        );
-
-    const joinButton =
-        sessionActive
-            ? applyEmoji(
-                new ButtonBuilder()
-                    .setCustomId('session_join')
-                    .setLabel('Join')
-                    .setStyle(ButtonStyle.Success),
-                icons.join
+        )
+        .addSeparatorComponents(divider())
+        .addActionRowComponents(
+            new ActionRowBuilder().addComponents(
+                sessionTimesButton,
+                statusButton
             )
-            : applyEmoji(
-                new ButtonBuilder()
-                    .setCustomId(
-                        'session_join_disabled'
-                    )
-                    .setLabel('Join')
-                    .setStyle(
-                        ButtonStyle.Secondary
-                    )
-                    .setDisabled(true),
-                icons.join
-            );
-
-    const informationRow =
-        new ActionRowBuilder()
-            .addComponents(
-                playerButton,
-                staffButton,
-                queueButton,
-                joinButton
-            );
-
-    let votingRow = null;
+        )
+        .addSeparatorComponents(divider())
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `## ${logoEmoji}${logoEmoji ? ' | ' : ''}Server Information\n\n` +
+                `- **Server name:** ${serverName}\n` +
+                `- **Server owner:** ${serverOwner}\n` +
+                `- **Server Code:** ${serverCode}\n` +
+                `- **Last updated:** <t:${updatedTimestamp}:R>`
+            )
+        )
+        .addSeparatorComponents(divider())
+        .addActionRowComponents(informationRow);
 
     if (isVoting) {
-        const voteButton =
-            applyEmoji(
-                new ButtonBuilder()
-                    .setCustomId('session_vote')
-                    .setLabel(
-                        `Vote: ${state.voters.size}/${state.voteTarget}`
-                    )
-                    .setStyle(
-                        ButtonStyle.Primary
-                    ),
-                icons.vote
-            );
-
-        const viewVotersButton =
+        const voteButton = applyEmoji(
             new ButtonBuilder()
-                .setCustomId(
-                    'session_view_voters'
-                )
-                .setLabel('View Voters')
-                .setStyle(
-                    ButtonStyle.Secondary
-                );
+                .setCustomId('session_vote')
+                .setLabel(`Vote ${state.voters.size}/${state.voteTarget}`)
+                .setStyle(ButtonStyle.Secondary),
+            icons.vote
+        );
 
-        votingRow =
-            new ActionRowBuilder()
-                .addComponents(
-                    voteButton,
-                    viewVotersButton
-                );
-    }
+        const votersButton = new ButtonBuilder()
+            .setCustomId('session_view_voters')
+            .setLabel('View voters')
+            .setStyle(ButtonStyle.Secondary);
 
-    const container =
-        new ContainerBuilder()
-            .addMediaGalleryComponents(
-                new MediaGalleryBuilder()
-                    .addItems(
-                        new MediaGalleryItemBuilder()
-                            .setURL(topUrl)
-                    )
-            )
-            .addSeparatorComponents(
-                divider()
-            )
-            .addActionRowComponents(
-                new ActionRowBuilder()
-                    .addComponents(
-                        sessionTimesButton,
-                        statusButton
-                    )
-            )
-            .addSeparatorComponents(
-                divider()
-            )
-            .addTextDisplayComponents(
-                new TextDisplayBuilder()
-                    .setContent(
-                        `## ${logoEmoji}${logoEmoji ? ' | ' : ''}Server Information\n\n` +
-                        `- **Server name:** ${sessionConfig.serverName}\n` +
-                        `- **Server owner:** ${sessionConfig.serverOwner}\n` +
-                        `- **Server Code:** ${sessionConfig.serverCode}\n` +
-                        `- **Last update:** <t:${now}:R>`
-                    )
-            )
-            .addSeparatorComponents(
-                divider()
-            )
-            .addActionRowComponents(
-                informationRow
-            );
-
-    if (votingRow) {
         container
+            .addSeparatorComponents(divider())
             .addActionRowComponents(
-                votingRow
+                new ActionRowBuilder().addComponents(
+                    voteButton,
+                    votersButton
+                )
             );
     }
 
     container
-        .addSeparatorComponents(
-            divider()
-        )
+        .addSeparatorComponents(divider())
         .addMediaGalleryComponents(
-            new MediaGalleryBuilder()
-                .addItems(
-                    new MediaGalleryItemBuilder()
-                        .setURL(bottomUrl)
-                )
+            new MediaGalleryBuilder().addItems(
+                new MediaGalleryItemBuilder().setURL('attachment://session-footer.png')
+            )
         );
 
     return {
         components: [container],
-        files
+        files: [topImage, bottomImage]
     };
 }
 
+async function sendSessionDashboard(channel) {
+    const dashboard = await buildSessionDashboard({ guild: channel.guild });
 
-async function sendSessionDashboard(
-    channel,
-    options = {}
-) {
-    const dashboard =
-        await buildSessionDashboard({
-            guild: channel.guild,
-            ...options
-        });
+    const message = await channel.send({
+        ...dashboard,
+        flags: MessageFlags.IsComponentsV2
+    });
 
-    const message =
-        await channel.send({
-            ...dashboard,
-            flags:
-                MessageFlags.IsComponentsV2
-        });
-
-    setDashboardMessageId(
-        message.id
-    );
-
+    setDashboardMessage(channel.id, message.id);
     return message;
 }
 
-
-function isSessionDashboardMessage(message) {
-    if (!message) {
-        return false;
-    }
-
-    try {
-        const raw = JSON.stringify(
-            message.components
-        );
-
-        return (
-            raw.includes('session_times') &&
-            raw.includes('session_player_count')
-        );
-    } catch {
-        return false;
-    }
-}
-
-
-async function findSessionDashboard(channel) {
+async function refreshSessionDashboard(client, options = {}) {
     const state = getState();
 
-    if (state.dashboardMessageId) {
-        try {
-            const known =
-                await channel.messages.fetch(
-                    state.dashboardMessageId
-                );
-
-            if (
-                isSessionDashboardMessage(
-                    known
-                )
-            ) {
-                return known;
-            }
-        } catch {}
+    if (!state.dashboardChannelId || !state.dashboardMessageId) {
+        return false;
     }
 
-    const messages =
-        await channel.messages.fetch({
-            limit: 100
-        });
+    const channel = await client.channels.fetch(state.dashboardChannelId).catch(() => null);
+    if (!channel?.isTextBased()) return false;
 
-    const dashboard =
-        messages.find(
-            message =>
-                message.author?.id ===
-                    channel.client.user.id &&
-                isSessionDashboardMessage(
-                    message
-                )
-        );
+    const message = await channel.messages.fetch(state.dashboardMessageId).catch(() => null);
+    if (!message) return false;
 
-    if (dashboard) {
-        setDashboardMessageId(
-            dashboard.id
-        );
+    let liveData = null;
+
+    if (options.preferCached) {
+        liveData = getCachedDashboardData();
     }
 
-    return dashboard || null;
+    const dashboard = await buildSessionDashboard({
+        guild: channel.guild,
+        liveData
+    });
+
+    await message.edit({
+        ...dashboard,
+        flags: MessageFlags.IsComponentsV2
+    });
+
+    return true;
 }
-
-
-async function updateSessionDashboardMessage(
-    message,
-    apiSnapshot = getApiSnapshot()
-) {
-    if (!message) {
-        return null;
-    }
-
-    const dashboard =
-        await buildSessionDashboard({
-            guild: message.guild,
-            apiSnapshot,
-            attachmentUrls:
-                getAttachmentUrls(message)
-        });
-
-    const payload = {
-        components:
-            dashboard.components
-    };
-
-    if (dashboard.files.length > 0) {
-        payload.files =
-            dashboard.files;
-    }
-
-    return await message.edit(
-        payload
-    );
-}
-
-
-async function refreshSessionDashboard(client) {
-    try {
-        const channel =
-            await client.channels.fetch(
-                sessionConfig.sessionChannelId
-            );
-
-        if (
-            !channel ||
-            !channel.isTextBased()
-        ) {
-            console.error(
-                '[SESSION DASHBOARD] Session channel could not be found.'
-            );
-
-            return;
-        }
-
-        const apiSnapshot =
-            await fetchErlcSnapshot();
-
-        const dashboard =
-            await findSessionDashboard(
-                channel
-            );
-
-        if (!dashboard) {
-            return;
-        }
-
-        await updateSessionDashboardMessage(
-            dashboard,
-            apiSnapshot
-        );
-
-    } catch (error) {
-        console.error(
-            '[SESSION DASHBOARD REFRESH ERROR]',
-            error
-        );
-    }
-}
-
 
 function startSessionDashboardUpdater(client) {
-    void refreshSessionDashboard(
-        client
-    );
+    const refreshMs =
+        sessionConfig.dashboardRefreshMs ||
+        sessionConfig.refreshIntervalMs ||
+        30_000;
 
-    return setInterval(
-        () => {
-            void refreshSessionDashboard(
-                client
-            );
-        },
-        sessionConfig.dashboardRefreshMs
-    );
+    // Run once shortly after startup so the dashboard has fresh data.
+    setTimeout(() => {
+        refreshSessionDashboard(client).catch(error => {
+            console.error('[SESSION DASHBOARD INITIAL REFRESH ERROR]', error);
+        });
+    }, 1500).unref?.();
+
+    const interval = setInterval(async () => {
+        try {
+            await refreshSessionDashboard(client);
+        } catch (error) {
+            console.error('[SESSION DASHBOARD REFRESH ERROR]', error);
+        }
+    }, refreshMs);
+
+    if (typeof interval.unref === 'function') {
+        interval.unref();
+    }
+
+    return interval;
 }
 
-
-async function handleDisplayButton(
-    interaction
-) {
+async function handleDisplayButton(interaction) {
     const ids = [
         'session_status',
         'session_player_count',
@@ -570,11 +375,7 @@ async function handleDisplayButton(
         'session_queue_count'
     ];
 
-    if (
-        !ids.includes(
-            interaction.customId
-        )
-    ) {
+    if (!ids.includes(interaction.customId)) {
         return false;
     }
 
@@ -582,13 +383,12 @@ async function handleDisplayButton(
     return true;
 }
 
-
 module.exports = {
     buildSessionDashboard,
     sendSessionDashboard,
-    findSessionDashboard,
-    updateSessionDashboardMessage,
     refreshSessionDashboard,
     startSessionDashboardUpdater,
-    handleDisplayButton
+    startDashboardAutoRefresh: startSessionDashboardUpdater,
+    handleDisplayButton,
+    getCachedDashboardData
 };
