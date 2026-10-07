@@ -1413,7 +1413,16 @@ client.once(
 
         try {
 
-
+console.log(
+    'COMMANDS BEING SENT TO DISCORD:',
+    [
+        sendTicketDashboardCommand.toJSON(),
+        sessionDashboardCommand.data.toJSON(),
+        sessionTimesCommand.data.toJSON(),
+        sessionVoteCommand.data.toJSON(),
+        reactionRole.command.toJSON()
+    ].map(cmd => cmd.name)
+);
 
             await rest.put(
 
