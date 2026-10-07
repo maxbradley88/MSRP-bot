@@ -51,8 +51,24 @@ function applyEmoji(button, emoji) {
     return button;
 }
 
-function displayCount(value) {
-    return Number.isFinite(value) ? value : '—';
+function firstFinite(...values) {
+    for (const value of values) {
+        if (Number.isFinite(Number(value))) {
+            return Number(value);
+        }
+    }
+
+    return null;
+}
+
+function displayLiveCount(value, { sessionActive, apiOnline }) {
+    if (!sessionActive || !apiOnline) {
+        return '—';
+    }
+
+    return Number.isFinite(Number(value))
+        ? Number(value)
+        : 0;
 }
 
 function getCachedDashboardData() {
@@ -116,15 +132,46 @@ async function buildSessionDashboard({ guild, liveData = null } = {}) {
     const data = liveData || await getDashboardData();
 
     const melonlyInfo = data.melonly?.info || {};
-    const playerCount = displayCount(data.melonly?.playerCount);
-    const queueCount = displayCount(data.melonly?.queueCount);
-    const staffCount = displayCount(data.melonly?.staffCount);
 
     const updatedAt = data.updatedAt || Date.now();
     const updatedTimestamp = Math.floor(updatedAt / 1000);
     const isVoting = state.status === 'vote';
     const isSessionActive = state.status === 'active' || state.status === 'shutting-down';
     const isOnline = data.bothOnline;
+
+    // Prefer Melonly if it supplies live values. At present its public
+    // server-info response may not include them, so ER:LC is used as a
+    // fallback once the ER:LC key is healthy.
+    const livePlayerCount = firstFinite(
+        data.melonly?.playerCount,
+        data.erlc?.playerCount
+    );
+    const liveQueueCount = firstFinite(
+        data.melonly?.queueCount,
+        data.erlc?.queueCount
+    );
+    const liveStaffCount = firstFinite(
+        data.melonly?.staffCount,
+        data.erlc?.staffCount
+    );
+
+    const playerCount = displayLiveCount(livePlayerCount, {
+        sessionActive: isSessionActive,
+        apiOnline: isOnline
+    });
+    const queueCount = displayLiveCount(liveQueueCount, {
+        sessionActive: isSessionActive,
+        apiOnline: isOnline
+    });
+    const staffCount = displayLiveCount(liveStaffCount, {
+        sessionActive: isSessionActive,
+        apiOnline: isOnline
+    });
+
+    const maxPlayers = firstFinite(
+        data.erlc?.maxPlayers,
+        sessionConfig.maxPlayers
+    ) || sessionConfig.maxPlayers;
 
     const logoEmoji = icons.logo ? icons.logo.toString() : '';
 
@@ -158,7 +205,7 @@ async function buildSessionDashboard({ guild, liveData = null } = {}) {
     const playerButton = applyEmoji(
         new ButtonBuilder()
             .setCustomId('session_player_count')
-            .setLabel(`Player count: ${playerCount}/${sessionConfig.maxPlayers}`)
+            .setLabel(`Player count: ${playerCount}${playerCount === '—' ? '' : `/${maxPlayers}`}`)
             .setStyle(isSessionActive ? ButtonStyle.Primary : ButtonStyle.Secondary)
             .setDisabled(!isSessionActive),
         icons.players
@@ -226,10 +273,12 @@ async function buildSessionDashboard({ guild, liveData = null } = {}) {
         sessionConfig.serverOwner ||
         'Unavailable';
 
+    // The public server code is intentionally fixed and is not taken
+    // from Melonly.
     const serverCode =
-        melonlyInfo.joinCode ||
-        melonlyInfo.code ||
-        sessionConfig.fallbackJoinCode;
+        sessionConfig.serverCode ||
+        sessionConfig.fallbackJoinCode ||
+        'MSRPAU';
 
     const container = new ContainerBuilder()
         .addMediaGalleryComponents(
