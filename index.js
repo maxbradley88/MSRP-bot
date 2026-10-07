@@ -34,26 +34,18 @@ const {
 
 
 const { createTicket } = require('./tickets/ticketCreate');
+
 const ticketSetup = require('./tickets/ticketSetup');
 
-const sessionDashboardCommand =
-    require('./sessions/sessionDashboardCommand');
-
-const sessionTimesCommand =
-    require('./sessions/sessionTimesCommand');
-
-const {
-    handleSessionButton
-} = require('./sessions/sessionButtons');
 const config = require('./tickets/ticketConfig');
 const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
 const ticketState = require('./tickets/ticketState');
 const ticketStatus = require('./tickets/ticketStatus');
 const ticketPermissions = require('./tickets/ticketPermissions');
 const { sendTicketCloseNotifications } = require('./tickets/ticketCloseMessage');
+
 const sessionDashboardCommand =
     require('./sessions/sessionDashboardCommand');
-    
 
 const sessionTimesCommand =
     require('./sessions/sessionTimesCommand');
@@ -2353,14 +2345,7 @@ if (
     interaction.isButton()
 ) {
 
-     const handledSessionButton =
-    await handleSessionButton(
-        interaction
-    );
-
-if (handledSessionButton) {
-    return;
-}
+    
 
     const handledSessionButton =
         await handleSessionButton(
