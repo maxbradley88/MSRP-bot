@@ -88,7 +88,8 @@ const client = new Client({
       partials: [
         Partials.Message,
         Partials.Channel,
-        Partials.Reaction
+        Partials.Reaction,
+        Partials.User
     ]
 
 });
@@ -1494,6 +1495,8 @@ if (
         return;
     }
 
+
+    
     if (
     interaction.commandName ===
     'reaction-role-message'
@@ -1541,27 +1544,6 @@ if (
     return;
 }
 
-
-client.on(
-    'messageReactionAdd',
-    async (reaction, user) => {
-        await reactionRole.handleReactionAdd(
-            reaction,
-            user
-        );
-    }
-);
-
-
-client.on(
-    'messageReactionRemove',
-    async (reaction, user) => {
-        await reactionRole.handleReactionRemove(
-            reaction,
-            user
-        );
-    }
-);
 
             // ==================================================
             // HAND OFF MODULE
@@ -3245,6 +3227,32 @@ if (
 );
 
 
+
+
+// ======================================================
+// REACTION ROLE EVENTS
+// ======================================================
+
+client.on(
+    'messageReactionAdd',
+    async (reaction, user) => {
+        await reactionRole.handleReactionAdd(
+            reaction,
+            user
+        );
+    }
+);
+
+
+client.on(
+    'messageReactionRemove',
+    async (reaction, user) => {
+        await reactionRole.handleReactionRemove(
+            reaction,
+            user
+        );
+    }
+);
 
 // ======================================================
 
