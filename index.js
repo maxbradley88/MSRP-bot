@@ -34,7 +34,17 @@ const {
 
 
 const { createTicket } = require('./tickets/ticketCreate');
+const ticketSetup = require('./tickets/ticketSetup');
 
+const sessionDashboardCommand =
+    require('./sessions/sessionDashboardCommand');
+
+const sessionTimesCommand =
+    require('./sessions/sessionTimesCommand');
+
+const {
+    handleSessionButton
+} = require('./sessions/sessionButtons');
 const config = require('./tickets/ticketConfig');
 const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
 const ticketState = require('./tickets/ticketState');
@@ -43,6 +53,7 @@ const ticketPermissions = require('./tickets/ticketPermissions');
 const { sendTicketCloseNotifications } = require('./tickets/ticketCloseMessage');
 const sessionDashboardCommand =
     require('./sessions/sessionDashboardCommand');
+    
 
 const sessionTimesCommand =
     require('./sessions/sessionTimesCommand');
@@ -1317,7 +1328,8 @@ client.once(
 
                 {
 
-body: [  
+body: [
+    ticketSetup.command.toJSON(),
     sessionDashboardCommand.data.toJSON(),
     sessionTimesCommand.data.toJSON()
 ]
@@ -1388,6 +1400,16 @@ if (
     interaction.isChatInputCommand()
 ) {
 
+    if (
+        interaction.commandName ===
+        'send-ticket-dashboard'
+    ) {
+        await ticketSetup.execute(
+            interaction
+        );
+
+        return;
+    }
 
     if (
         interaction.commandName ===
@@ -1400,7 +1422,6 @@ if (
         return;
     }
 
-
     if (
         interaction.commandName ===
         'set-session-times'
@@ -1411,7 +1432,6 @@ if (
 
         return;
     }
-
 
     return;
 }
@@ -2332,6 +2352,15 @@ if (
 if (
     interaction.isButton()
 ) {
+
+     const handledSessionButton =
+    await handleSessionButton(
+        interaction
+    );
+
+if (handledSessionButton) {
+    return;
+}
 
     const handledSessionButton =
         await handleSessionButton(
