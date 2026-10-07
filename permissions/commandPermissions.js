@@ -42,7 +42,7 @@ const commandPermissions = {
     '1547525713853288448'
 ],
 
-'session-vote': [
+    'session-vote': [
     '1548126738876342272'
 ],
 
@@ -75,19 +75,10 @@ const settings = {
  * ======================================================
  */
 
-function canUseCommand(
-    interaction
-) {
+async function canUseCommand(interaction) {
     const commandName =
         interaction.commandName;
 
-    /*
-     * If the command isn't in the permissions
-     * file yet, block it.
-     *
-     * This means we don't accidentally create
-     * unrestricted staff commands.
-     */
     if (
         !Object.prototype.hasOwnProperty.call(
             commandPermissions,
@@ -101,26 +92,15 @@ function canUseCommand(
         return false;
     }
 
-
     const allowedRoles =
-        commandPermissions[
-            commandName
-        ];
+        commandPermissions[commandName];
 
-
-    /*
-     * Empty role list = everyone allowed.
-     */
-    if (
-        allowedRoles.length === 0
-    ) {
+    // Empty list = everyone can use it.
+    if (allowedRoles.length === 0) {
         return true;
     }
 
-
-    /*
-     * Administrator bypass.
-     */
+    // Administrator bypass.
     if (
         settings.administratorsBypass &&
         interaction.memberPermissions?.has(
@@ -130,26 +110,52 @@ function canUseCommand(
         return true;
     }
 
+    // Fetch the member directly so we always get
+    // their current Discord roles.
+    const member =
+        await interaction.guild.members
+            .fetch(interaction.user.id)
+            .catch(() => null);
 
-    /*
-     * Check whether the member has
-     * at least one allowed role.
-     */
-    const memberRoles =
-        interaction.member?.roles?.cache;
+    if (!member) {
+        console.warn(
+            `[COMMAND PERMISSIONS] Could not fetch member ${interaction.user.id}.`
+        );
 
-    if (!memberRoles) {
         return false;
     }
 
+    const hasAllowedRole =
+        allowedRoles.some(
+            roleId =>
+                member.roles.cache.has(roleId)
+        );
 
-    return allowedRoles.some(
-        roleId =>
-            memberRoles.has(
-                roleId
-            )
+    console.log(
+        `[COMMAND PERMISSIONS] ${interaction.user.tag} using /${commandName}`
     );
+
+    console.log(
+        'Allowed roles:',
+        allowedRoles
+    );
+
+    console.log(
+        'Member roles:',
+        member.roles.cache.map(
+            role => `${role.name} (${role.id})`
+        )
+    );
+
+    console.log(
+        'Permission result:',
+        hasAllowedRole
+    );
+
+    return hasAllowedRole;
 }
+
+
 
 
 /*
@@ -158,17 +164,18 @@ function canUseCommand(
  * ======================================================
  */
 
+
 async function checkCommandPermission(
     interaction
 ) {
-    if (
-        canUseCommand(
+    const allowed =
+        await canUseCommand(
             interaction
-        )
-    ) {
+        );
+
+    if (allowed) {
         return true;
     }
-
 
     await interaction.reply({
         content:
@@ -177,7 +184,6 @@ async function checkCommandPermission(
         flags:
             MessageFlags.Ephemeral
     });
-
 
     return false;
 }
