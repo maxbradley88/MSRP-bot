@@ -14,6 +14,8 @@ const {
 
     MessageFlags,
 
+    Partials,
+
     ModalBuilder,
 
     LabelBuilder,
@@ -53,6 +55,9 @@ const {
     checkCommandPermission
 } = require('./permissions/commandPermissions');
 
+const reactionRole =
+    require('./reactionRoles/reactionRole');
+
 const sessionDashboardCommand =
     require('./sessions/sessionDashboardCommand');
 
@@ -72,13 +77,22 @@ const client = new Client({
 
         GatewayIntentBits.GuildMembers,
 
+        GatewayIntentBits.GuildMessageReactions,
+
         GatewayIntentBits.GuildMessages,
 
         GatewayIntentBits.MessageContent
 
+    ],
+
+      partials: [
+        Partials.Message,
+        Partials.Channel,
+        Partials.Reaction
     ]
 
 });
+
 
 require('./messages/sendMessage')(client);
 
@@ -1401,7 +1415,8 @@ client.once(
 body: [
     sendTicketDashboardCommand.toJSON(),
     sessionDashboardCommand.data.toJSON(),
-    sessionTimesCommand.data.toJSON()
+    sessionTimesCommand.data.toJSON(),
+    reactionRole.command.toJSON()
 ]
 
                 }
@@ -1465,6 +1480,16 @@ client.on(
             // ==================================================
 
 
+if (
+    interaction.commandName ===
+    'reaction-role-message'
+) {
+    await reactionRole.execute(
+        interaction
+    );
+
+    return;
+}
 
 if (
     interaction.isChatInputCommand()
@@ -1516,6 +1541,26 @@ if (
 }
 
 
+client.on(
+    'messageReactionAdd',
+    async (reaction, user) => {
+        await reactionRole.handleReactionAdd(
+            reaction,
+            user
+        );
+    }
+);
+
+
+client.on(
+    'messageReactionRemove',
+    async (reaction, user) => {
+        await reactionRole.handleReactionRemove(
+            reaction,
+            user
+        );
+    }
+);
 
             // ==================================================
             // HAND OFF MODULE

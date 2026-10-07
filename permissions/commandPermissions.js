@@ -36,7 +36,11 @@ const commandPermissions = {
 
     'set-session-times': [
         '1547525713853288448'
-    ]
+    ],
+
+    'reaction-role-message': [
+    '1547525713853288448'
+],
 
 };
 
