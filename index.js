@@ -28,6 +28,8 @@ const {
 
     ContainerBuilder,
 
+    SlashCommandBuilder,
+
     TextDisplayBuilder
 
 } = require('discord.js');
@@ -36,6 +38,10 @@ const {
 const { createTicket } = require('./tickets/ticketCreate');
 
 const ticketSetup = require('./tickets/ticketSetup');
+const sendTicketDashboardCommand =
+    new SlashCommandBuilder()
+        .setName('send-ticket-dashboard')
+        .setDescription('Sends the ticket dashboard.');
 
 const config = require('./tickets/ticketConfig');
 const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
@@ -1321,7 +1327,7 @@ client.once(
                 {
 
 body: [
-    ticketSetup.command.toJSON(),
+    sendTicketDashboardCommand.toJSON(),
     sessionDashboardCommand.data.toJSON(),
     sessionTimesCommand.data.toJSON()
 ]
