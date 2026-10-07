@@ -1309,6 +1309,75 @@ client.once(
             );
 
 
+        try {
+
+            const globalCommands =
+                await rest.get(
+                    Routes.applicationCommands(
+                        client.user.id
+                    )
+                );
+
+            for (const command of globalCommands) {
+
+                if (
+                    command.name ===
+                    'ticketsetup'
+                ) {
+
+                    await rest.delete(
+                        Routes.applicationCommand(
+                            client.user.id,
+                            command.id
+                        )
+                    );
+
+                    console.log(
+                        'Deleted old global /ticketsetup command.'
+                    );
+                }
+            }
+
+
+            const guildCommands =
+                await rest.get(
+                    Routes.applicationGuildCommands(
+                        client.user.id,
+                        process.env.DISCORD_GUILD_ID
+                    )
+                );
+
+            for (const command of guildCommands) {
+
+                if (
+                    command.name ===
+                    'ticketsetup'
+                ) {
+
+                    await rest.delete(
+                        Routes.applicationGuildCommand(
+                            client.user.id,
+                            process.env.DISCORD_GUILD_ID,
+                            command.id
+                        )
+                    );
+
+                    console.log(
+                        'Deleted old guild /ticketsetup command.'
+                    );
+                }
+            }
+
+        } catch (error) {
+
+            console.error(
+                'Failed to remove old /ticketsetup command:',
+                error
+            );
+
+        }
+
+
 
         try {
 
