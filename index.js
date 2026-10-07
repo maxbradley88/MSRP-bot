@@ -49,6 +49,9 @@ const ticketState = require('./tickets/ticketState');
 const ticketStatus = require('./tickets/ticketStatus');
 const ticketPermissions = require('./tickets/ticketPermissions');
 const { sendTicketCloseNotifications } = require('./tickets/ticketCloseMessage');
+const {
+    checkCommandPermission
+} = require('./permissions/commandPermissions');
 
 const sessionDashboardCommand =
     require('./sessions/sessionDashboardCommand');
@@ -1466,6 +1469,15 @@ client.on(
 if (
     interaction.isChatInputCommand()
 ) {
+
+        const hasCommandPermission =
+        await checkCommandPermission(
+            interaction
+        );
+
+    if (!hasCommandPermission) {
+        return;
+    }
 
     if (
         interaction.commandName ===
