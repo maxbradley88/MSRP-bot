@@ -85,7 +85,7 @@ function getCachedDashboardData() {
     return {
         melonly,
         erlc,
-        bothOnline: Boolean(melonly.ok && erlc.ok),
+        bothOnline: Boolean(erlc.ok),
         updatedAt: state.lastUpdatedAt || Date.now()
     };
 }
@@ -121,7 +121,7 @@ async function getDashboardData() {
     return {
         melonly,
         erlc,
-        bothOnline: Boolean(melonly.ok && erlc.ok),
+        bothOnline: Boolean(erlc.ok),
         updatedAt
     };
 }
