@@ -1388,17 +1388,6 @@ if (
     interaction.isChatInputCommand()
 ) {
 
-    if (
-        interaction.commandName ===
-        'send-ticket-dashboard'
-    ) {
-        await ticketSetup.execute(
-            interaction
-        );
-
-        return;
-    }
-
 
     if (
         interaction.commandName ===
