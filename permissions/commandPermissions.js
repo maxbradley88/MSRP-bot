@@ -76,8 +76,7 @@ const settings = {
  */
 
 async function canUseCommand(interaction) {
-    const commandName =
-        interaction.commandName;
+    const commandName = interaction.commandName;
 
     if (
         !Object.prototype.hasOwnProperty.call(
@@ -95,12 +94,10 @@ async function canUseCommand(interaction) {
     const allowedRoles =
         commandPermissions[commandName];
 
-    // Empty list = everyone can use it.
     if (allowedRoles.length === 0) {
         return true;
     }
 
-    // Administrator bypass.
     if (
         settings.administratorsBypass &&
         interaction.memberPermissions?.has(
@@ -110,49 +107,75 @@ async function canUseCommand(interaction) {
         return true;
     }
 
-    // Fetch the member directly so we always get
-    // their current Discord roles.
-    const member =
-        await interaction.guild.members
-            .fetch(interaction.user.id)
-            .catch(() => null);
+    let member = interaction.member;
 
-    if (!member) {
-        console.warn(
-            `[COMMAND PERMISSIONS] Could not fetch member ${interaction.user.id}.`
+    try {
+        member =
+            await interaction.guild.members.fetch(
+                interaction.user.id
+            );
+    } catch (error) {
+        console.error(
+            '[COMMAND PERMISSIONS] Member fetch failed:',
+            error
         );
-
-        return false;
     }
 
-    const hasAllowedRole =
-        allowedRoles.some(
-            roleId =>
-                member.roles.cache.has(roleId)
-        );
+    let memberRoleIds = [];
+
+    // Normal discord.js GuildMember
+    if (member?.roles?.cache) {
+        memberRoleIds =
+            [...member.roles.cache.keys()];
+    }
+
+    // Fallback for raw interaction member data
+    else if (Array.isArray(member?.roles)) {
+        memberRoleIds =
+            member.roles;
+    }
 
     console.log(
-        `[COMMAND PERMISSIONS] ${interaction.user.tag} using /${commandName}`
+        '========== COMMAND PERMISSION DEBUG =========='
     );
 
     console.log(
-        'Allowed roles:',
+        'Command:',
+        commandName
+    );
+
+    console.log(
+        'User:',
+        interaction.user.tag,
+        interaction.user.id
+    );
+
+    console.log(
+        'Allowed role IDs:',
         allowedRoles
     );
 
     console.log(
-        'Member roles:',
-        member.roles.cache.map(
-            role => `${role.name} (${role.id})`
-        )
+        'Member role IDs:',
+        memberRoleIds
+    );
+
+    const allowed =
+        allowedRoles.some(
+            roleId =>
+                memberRoleIds.includes(roleId)
+        );
+
+    console.log(
+        'Allowed:',
+        allowed
     );
 
     console.log(
-        'Permission result:',
-        hasAllowedRole
+        '=============================================='
     );
 
-    return hasAllowedRole;
+    return allowed;
 }
 
 
