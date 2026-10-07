@@ -38,7 +38,6 @@ const {
 
 let pendingShutdownTimer = null;
 let pendingCountdownMessage = null;
-let shutdownAnnouncementTimer = null;
 
 function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -118,11 +117,6 @@ async function removeShutdownAnnouncement(client) {
     );
 
     clearShutdownAnnouncement();
-
-    if (shutdownAnnouncementTimer) {
-        clearTimeout(shutdownAnnouncementTimer);
-        shutdownAnnouncementTimer = null;
-    }
 }
 
 function buildCountdownAnnouncement(shutdownAt) {
@@ -159,7 +153,7 @@ function buildShutdownAnnouncement() {
         .addSeparatorComponents(divider())
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                '-# This message will automatically disappear in 1 hour, or when the next session starts.'
+                '-# This notice will remain here until a new session vote begins or a new session starts.'
             )
         );
 }
@@ -192,43 +186,21 @@ async function removeCountdownAnnouncement(client) {
     pendingCountdownMessage = null;
 }
 
-function scheduleShutdownAnnouncementDeletion(client, delayMs) {
-    if (shutdownAnnouncementTimer) {
-        clearTimeout(shutdownAnnouncementTimer);
-    }
-
-    shutdownAnnouncementTimer = setTimeout(async () => {
-        try {
-            await removeShutdownAnnouncement(client);
-        } catch (error) {
-            console.warn('[SESSION SHUTDOWN MESSAGE CLEANUP ERROR]', error);
-        }
-    }, Math.max(0, delayMs));
-
-    shutdownAnnouncementTimer.unref?.();
-}
-
 async function sendShutdownAnnouncement(client) {
     await removeShutdownAnnouncement(client);
 
     const channel = await getAnnouncementChannel(client);
-    const expiresAt = Date.now() +
-        (sessionConfig.shutdownAnnouncementLifetimeMs || 60 * 60 * 1000);
 
     const message = await channel.send({
         components: [buildShutdownAnnouncement()],
         flags: MessageFlags.IsComponentsV2
     });
 
+    // Keep this notice until the next session vote or session start.
     setShutdownAnnouncement(
         channel.id,
         message.id,
-        expiresAt
-    );
-
-    scheduleShutdownAnnouncementDeletion(
-        client,
-        expiresAt - Date.now()
+        null
     );
 }
 
@@ -311,6 +283,10 @@ async function runNormalShutdown(interaction) {
         startShutdown();
         await refreshSessionDashboard(interaction.client, { preferCached: true });
 
+        // The session is now closing, so remove the old Session Started notice
+        // immediately rather than leaving it visible during the countdown.
+        await removeSessionStartedAnnouncement(interaction.client);
+
         await stopMelonlyShiftsBestEffort();
         await beginGraceLockdown();
 
@@ -323,7 +299,8 @@ async function runNormalShutdown(interaction) {
             shutdownAt
         );
 
-        // Priority timer is in seconds.
+        // Priority timer is in seconds. The ER:LC command helper also queues
+        // and spaces commands so the following :m does not get rate-limited.
         await runErlcCommand(`:prty ${countdownSeconds}`);
 
         await runErlcCommand(
@@ -419,25 +396,11 @@ async function runForceShutdown(interaction) {
 }
 
 function resumeShutdownAnnouncementExpiry(client) {
-    const state = getState();
-
-    if (
-        !state.shutdownAnnouncementChannelId ||
-        !state.shutdownAnnouncementMessageId ||
-        !state.shutdownAnnouncementExpiresAt
-    ) {
-        return;
-    }
-
-    const remaining = state.shutdownAnnouncementExpiresAt - Date.now();
-
-    if (remaining <= 0) {
-        removeShutdownAnnouncement(client).catch(() => {});
-        return;
-    }
-
-    scheduleShutdownAnnouncementDeletion(client, remaining);
+    // Shutdown notices now intentionally persist until the next vote or session
+    // starts, so there is no expiry timer to resume after a bot restart.
+    return;
 }
+
 
 module.exports = {
     data: new SlashCommandBuilder()

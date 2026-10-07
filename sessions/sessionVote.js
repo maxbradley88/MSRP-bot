@@ -162,6 +162,9 @@ async function beginVote(interaction) {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+    // A new vote replaces any old post-shutdown notice immediately.
+    await removeShutdownAnnouncement(interaction.client).catch(() => {});
+
     startVote(target);
 
     const channel = await getAnnouncementChannel(interaction.client);

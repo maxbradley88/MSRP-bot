@@ -221,7 +221,14 @@ async function getErlcPlayers() {
     }
 }
 
-async function runErlcCommand(command) {
+let erlcCommandChain = Promise.resolve();
+let lastErlcCommandAt = 0;
+
+function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function runErlcCommandNow(command) {
     const rawKey = process.env.ERLC_SERVER_KEY;
     const key = rawKey ? rawKey.trim() : '';
 
@@ -234,49 +241,104 @@ async function runErlcCommand(command) {
         throw new Error('An ER:LC command is required.');
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-
-    try {
-        const response = await fetch(
-            'https://api.erlc.gg/v2/server/command',
-            {
-                method: 'POST',
-                signal: controller.signal,
-                headers: {
-                    'Server-Key': key,
-                    Accept: 'application/json',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ command: cleanCommand })
-            }
-        );
-
-        const text = await response.text();
-        let data = null;
-
-        if (text) {
-            try {
-                data = JSON.parse(text);
-            } catch {
-                data = text;
-            }
-        }
-
-        if (!response.ok) {
-            const detail =
-                typeof data === 'string'
-                    ? data.slice(0, 300)
-                    : data?.message || data?.error || `HTTP ${response.status}`;
-
-            throw new Error(`ER:LC command failed (${response.status}): ${detail}`);
-        }
-
-        console.log(`[ERLC COMMAND] ${cleanCommand} sent successfully.`);
-        return data;
-    } finally {
-        clearTimeout(timeout);
+    // ER:LC command execution is rate-limited. Keep command calls spaced out
+    // so sequences such as :prty -> :m do not immediately 429.
+    const minimumGapMs = 3000;
+    const elapsed = Date.now() - lastErlcCommandAt;
+    if (elapsed < minimumGapMs) {
+        await wait(minimumGapMs - elapsed);
     }
+
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10_000);
+
+        try {
+            const response = await fetch(
+                'https://api.erlc.gg/v2/server/command',
+                {
+                    method: 'POST',
+                    signal: controller.signal,
+                    headers: {
+                        'Server-Key': key,
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ command: cleanCommand })
+                }
+            );
+
+            const text = await response.text();
+            let data = null;
+
+            if (text) {
+                try {
+                    data = JSON.parse(text);
+                } catch {
+                    data = text;
+                }
+            }
+
+            if (response.status === 429) {
+                const retryAfterHeader = response.headers.get('retry-after');
+                const retryAfterSeconds = Number(retryAfterHeader);
+                const retryMs = Number.isFinite(retryAfterSeconds)
+                    ? Math.max(1000, retryAfterSeconds * 1000)
+                    : 5000 * attempt;
+
+                console.warn(
+                    `[ERLC COMMAND] Rate limited while sending ${cleanCommand}. Retrying in ${Math.ceil(retryMs / 1000)}s (attempt ${attempt}/4).`
+                );
+
+                lastError = new Error(
+                    `ER:LC command failed (429): ${typeof data === 'string' ? data : data?.message || data?.error || 'You are being rate limited!'}`
+                );
+
+                if (attempt < 4) {
+                    await wait(retryMs);
+                    continue;
+                }
+
+                throw lastError;
+            }
+
+            if (!response.ok) {
+                const detail =
+                    typeof data === 'string'
+                        ? data.slice(0, 300)
+                        : data?.message || data?.error || `HTTP ${response.status}`;
+
+                throw new Error(`ER:LC command failed (${response.status}): ${detail}`);
+            }
+
+            lastErlcCommandAt = Date.now();
+            console.log(`[ERLC COMMAND] ${cleanCommand} sent successfully.`);
+            return data;
+        } catch (error) {
+            lastError = error;
+
+            if (attempt >= 4 || !String(error?.message || '').includes('(429)')) {
+                throw error;
+            }
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    throw lastError || new Error('ER:LC command failed.');
+}
+
+function runErlcCommand(command) {
+    const task = erlcCommandChain.then(
+        () => runErlcCommandNow(command),
+        () => runErlcCommandNow(command)
+    );
+
+    // Keep the queue alive even when one command fails.
+    erlcCommandChain = task.catch(() => {});
+    return task;
 }
 
 module.exports = {
