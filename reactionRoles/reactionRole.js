@@ -3,7 +3,10 @@ const path = require('path');
 
 const {
     SlashCommandBuilder,
-    MessageFlags
+    MessageFlags,
+    ButtonBuilder,
+ButtonStyle,
+ActionRowBuilder
 } = require('discord.js');
 
 
@@ -122,30 +125,41 @@ async function findMessage(
 }
 
 
-async function sendTemporaryMessage(
+async function sendDismissMessage(
     channel,
+    userId,
     content
 ) {
     try {
-        const message =
-            await channel.send({
-                content,
-                allowedMentions: {
-                    parse: []
-                }
-            });
+        const dismissButton =
+            new ButtonBuilder()
+                .setCustomId(
+                    `reaction_role_dismiss:${userId}`
+                )
+                .setLabel('Dismiss')
+                .setStyle(
+                    ButtonStyle.Secondary
+                );
 
-        setTimeout(
-            () => {
-                message.delete()
-                    .catch(() => {});
-            },
-            5000
-        );
+        const row =
+            new ActionRowBuilder()
+                .addComponents(
+                    dismissButton
+                );
+
+        await channel.send({
+            content,
+            components: [
+                row
+            ],
+            allowedMentions: {
+                parse: []
+            }
+        });
 
     } catch (error) {
         console.error(
-            '[REACTION ROLE TEMP MESSAGE ERROR]',
+            '[REACTION ROLE DISMISS MESSAGE ERROR]',
             error
         );
     }
@@ -483,10 +497,11 @@ async function handleReactionAdd(
                 role.id
             )
         ) {
-            await sendTemporaryMessage(
-                reaction.message.channel,
-                `<@${user.id}> You already have this role, remove your reaction to remove the role.`
-            );
+await sendDismissMessage(
+    reaction.message.channel,
+    user.id,
+    'You already have this role. Remove your reaction to remove the role.'
+);
 
             return;
         }
@@ -502,11 +517,11 @@ async function handleReactionAdd(
             `[REACTION ROLE ADDED] ${user.username} → ${role.name}`
         );
 
-
-        await sendTemporaryMessage(
-            reaction.message.channel,
-            `<@${user.id}> Role added.`
-        );
+await sendDismissMessage(
+    reaction.message.channel,
+    user.id,
+    'Your role has been added.'
+);
 
 
     } catch (error) {
@@ -653,10 +668,11 @@ async function handleReactionRemove(
             );
 
 
-            await sendTemporaryMessage(
-                reaction.message.channel,
-                `<@${user.id}> Role removed.`
-            );
+await sendDismissMessage(
+    reaction.message.channel,
+    user.id,
+    'Your role has been removed.'
+);
         }
 
 
