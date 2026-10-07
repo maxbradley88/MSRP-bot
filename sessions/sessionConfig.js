@@ -34,5 +34,12 @@ module.exports = {
 
     // Melonly currently has no documented public session-start endpoint.
     // We still attempt the helper, but failure will NOT block the Discord session.
-    attemptMelonlyStart: false
+    attemptMelonlyStart: false,
+
+    // Shutdown flow.
+    shutdownCountdownSeconds: 180,
+    shutdownAnnouncementLifetimeMs: 60 * 60 * 1000,
+    shutdownLockdownRefreshMs: 15_000,
+    shutdownGameMessage:
+        'The MSRP server will be shutting down in 3 minutes. Please wrap-up your role-plays'
 };

@@ -25,6 +25,10 @@ const {
 } = require('./sessionDashboard');
 
 const {
+    removeShutdownAnnouncement
+} = require('./sessionShutdown');
+
+const {
     startMelonlySession
 } = require('./melonlyApi');
 
@@ -215,6 +219,10 @@ async function completeVote(client) {
     await tryStartMelonlySession();
 
     startSession();
+
+    // Starting a new session cancels the post-shutdown join lockdown and
+    // removes the previous one-hour shutdown notice if it still exists.
+    await removeShutdownAnnouncement(client).catch(() => {});
 
     // Remove the old vote announcement and vote controls first.
     await deleteVoteAnnouncement(client);

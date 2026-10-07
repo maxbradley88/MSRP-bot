@@ -137,7 +137,7 @@ async function buildSessionDashboard({ guild, liveData = null, forceInactive = f
     const updatedTimestamp = Math.floor(updatedAt / 1000);
     const isVoting = state.status === 'vote';
     const isSessionActive = !forceInactive && (state.status === 'active' || state.status === 'shutting-down');
-    const isOnline = data.bothOnline;
+    const isOnline = Boolean(data.erlc?.ok);
 
     // Live players and queue now come ONLY from ER:LC. Melonly is not
     // used for these counters. Staff is the number of Discord members

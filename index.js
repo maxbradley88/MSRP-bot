@@ -71,6 +71,10 @@ const sessionShutdownCommand =
     require('./sessions/sessionShutdown');
 
 const {
+    startSessionLockdownWatcher
+} = require('./sessions/sessionLockdown');
+
+const {
     startDashboardAutoRefresh
 } = require('./sessions/sessionDashboard');
 
@@ -1429,6 +1433,7 @@ body: [
     sessionTimesCommand.data.toJSON(),
     sessionVoteCommand.data.toJSON(),
     sessionShutdownCommand.data.toJSON(),
+    sessionShutdownCommand.forceData.toJSON(),
     reactionRole.command.toJSON()
 ]
 
@@ -1445,6 +1450,8 @@ body: [
             );
 
             startDashboardAutoRefresh(client);
+            startSessionLockdownWatcher();
+            sessionShutdownCommand.resumeShutdownAnnouncementExpiry(client);
 
 
 
@@ -1571,6 +1578,17 @@ if (
         'session-shutdown'
     ) {
         await sessionShutdownCommand.execute(
+            interaction
+        );
+
+        return;
+    }
+
+    if (
+        interaction.commandName ===
+        'force-shutdown'
+    ) {
+        await sessionShutdownCommand.executeForce(
             interaction
         );
 

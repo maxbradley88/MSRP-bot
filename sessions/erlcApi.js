@@ -125,6 +125,102 @@ async function getErlcHealth() {
     }
 }
 
+function normalizeErlcPlayer(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+
+    const username =
+        raw.Username ||
+        raw.username ||
+        raw.Name ||
+        raw.name ||
+        (typeof raw.Player === 'string'
+            ? raw.Player.split(':')[0]
+            : null);
+
+    const userId =
+        raw.UserId ??
+        raw.userId ??
+        raw.UserID ??
+        raw.id ??
+        (typeof raw.Player === 'string' && raw.Player.includes(':')
+            ? raw.Player.split(':').pop()
+            : null);
+
+    const permission =
+        raw.Permission ||
+        raw.permission ||
+        'Normal';
+
+    if (!username) return null;
+
+    return {
+        username: String(username),
+        userId: userId == null ? null : String(userId),
+        permission: String(permission)
+    };
+}
+
+async function getErlcPlayers() {
+    const rawKey = process.env.ERLC_SERVER_KEY;
+    const key = rawKey ? rawKey.trim() : '';
+
+    if (!key) {
+        throw new Error('ERLC_SERVER_KEY is not configured.');
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+
+    try {
+        const response = await fetch(
+            'https://api.erlc.gg/v2/server?Players=true',
+            {
+                signal: controller.signal,
+                headers: {
+                    'Server-Key': key,
+                    Accept: 'application/json'
+                }
+            }
+        );
+
+        // ER:LC reports an empty/offline private server as 422. During a
+        // shutdown lockdown this is expected, so treat it as no players.
+        if (response.status === 422) {
+            return [];
+        }
+
+        const text = await response.text();
+        let data = null;
+
+        if (text) {
+            try {
+                data = JSON.parse(text);
+            } catch {
+                data = text;
+            }
+        }
+
+        if (!response.ok) {
+            const detail =
+                typeof data === 'string'
+                    ? data.slice(0, 250)
+                    : data?.message || data?.error || `HTTP ${response.status}`;
+
+            throw new Error(`ER:LC players request failed (${response.status}): ${detail}`);
+        }
+
+        const players = Array.isArray(data?.Players)
+            ? data.Players
+            : [];
+
+        return players
+            .map(normalizeErlcPlayer)
+            .filter(Boolean);
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
 async function runErlcCommand(command) {
     const rawKey = process.env.ERLC_SERVER_KEY;
     const key = rawKey ? rawKey.trim() : '';
@@ -185,5 +281,6 @@ async function runErlcCommand(command) {
 
 module.exports = {
     getErlcHealth,
+    getErlcPlayers,
     runErlcCommand
 };

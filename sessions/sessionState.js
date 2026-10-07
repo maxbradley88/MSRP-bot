@@ -11,20 +11,6 @@ function loadRuntime() {
     }
 }
 
-function saveRuntime() {
-    try {
-        fs.writeFileSync(
-            runtimePath,
-            JSON.stringify({
-                dashboardChannelId: state.dashboardChannelId,
-                dashboardMessageId: state.dashboardMessageId
-            }, null, 2)
-        );
-    } catch (error) {
-        console.error('[SESSION RUNTIME SAVE ERROR]', error);
-    }
-}
-
 const runtime = loadRuntime();
 
 const state = {
@@ -42,10 +28,36 @@ const state = {
     sessionAnnouncementChannelId: null,
     sessionAnnouncementMessageId: null,
 
+    shutdownAnnouncementChannelId: runtime.shutdownAnnouncementChannelId || null,
+    shutdownAnnouncementMessageId: runtime.shutdownAnnouncementMessageId || null,
+    shutdownAnnouncementExpiresAt: runtime.shutdownAnnouncementExpiresAt || null,
+
+    shutdownLockdownEnabled: Boolean(runtime.shutdownLockdownEnabled),
+    shutdownGraceUserIds: new Set(runtime.shutdownGraceUserIds || []),
+
     lastMelonlySnapshot: null,
     lastErlcHealth: null,
     lastUpdatedAt: null
 };
+
+function saveRuntime() {
+    try {
+        fs.writeFileSync(
+            runtimePath,
+            JSON.stringify({
+                dashboardChannelId: state.dashboardChannelId,
+                dashboardMessageId: state.dashboardMessageId,
+                shutdownAnnouncementChannelId: state.shutdownAnnouncementChannelId,
+                shutdownAnnouncementMessageId: state.shutdownAnnouncementMessageId,
+                shutdownAnnouncementExpiresAt: state.shutdownAnnouncementExpiresAt,
+                shutdownLockdownEnabled: state.shutdownLockdownEnabled,
+                shutdownGraceUserIds: [...state.shutdownGraceUserIds]
+            }, null, 2)
+        );
+    } catch (error) {
+        console.error('[SESSION RUNTIME SAVE ERROR]', error);
+    }
+}
 
 function getState() {
     return state;
@@ -87,6 +99,11 @@ function startSession() {
     state.voters.clear();
     state.emptySince = null;
     state.shuttingDown = false;
+
+    // A new session disables the post-shutdown join lockdown.
+    state.shutdownLockdownEnabled = false;
+    state.shutdownGraceUserIds.clear();
+    saveRuntime();
 }
 
 function startShutdown() {
@@ -137,6 +154,40 @@ function clearSessionAnnouncement() {
     state.sessionAnnouncementMessageId = null;
 }
 
+function setShutdownAnnouncement(channelId, messageId, expiresAt) {
+    state.shutdownAnnouncementChannelId = channelId;
+    state.shutdownAnnouncementMessageId = messageId;
+    state.shutdownAnnouncementExpiresAt = expiresAt || null;
+    saveRuntime();
+}
+
+function clearShutdownAnnouncement() {
+    state.shutdownAnnouncementChannelId = null;
+    state.shutdownAnnouncementMessageId = null;
+    state.shutdownAnnouncementExpiresAt = null;
+    saveRuntime();
+}
+
+function enableShutdownLockdown(graceUserIds = []) {
+    state.shutdownLockdownEnabled = true;
+    state.shutdownGraceUserIds = new Set(
+        (graceUserIds || []).map(value => String(value))
+    );
+    saveRuntime();
+}
+
+function enterPostShutdownLockdown() {
+    state.shutdownLockdownEnabled = true;
+    state.shutdownGraceUserIds.clear();
+    saveRuntime();
+}
+
+function disableShutdownLockdown() {
+    state.shutdownLockdownEnabled = false;
+    state.shutdownGraceUserIds.clear();
+    saveRuntime();
+}
+
 function setApiSnapshot({ melonly, erlc, updatedAt = Date.now() }) {
     state.lastMelonlySnapshot = melonly;
     state.lastErlcHealth = erlc;
@@ -161,5 +212,10 @@ module.exports = {
     clearVoteAnnouncement,
     setSessionAnnouncement,
     clearSessionAnnouncement,
+    setShutdownAnnouncement,
+    clearShutdownAnnouncement,
+    enableShutdownLockdown,
+    enterPostShutdownLockdown,
+    disableShutdownLockdown,
     setApiSnapshot
 };

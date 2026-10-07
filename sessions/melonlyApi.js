@@ -117,8 +117,24 @@ async function startMelonlySession() {
     );
 }
 
+async function stopActiveMelonlyShifts() {
+    // Melonly's current public clients document reading shifts, but do not
+    // expose a documented write/clock-out endpoint. Do not guess a destructive
+    // endpoint. This hook is kept here so the correct endpoint can be dropped in
+    // later without changing the shutdown flow.
+    console.warn(
+        '[MELONLY SHIFTS] Automatic shift ending is not available through the documented public API yet.'
+    );
+
+    return {
+        supported: false,
+        stopped: 0
+    };
+}
+
 module.exports = {
     getMelonlyServerInfo,
     getMelonlySnapshot,
-    startMelonlySession
+    startMelonlySession,
+    stopActiveMelonlyShifts
 };

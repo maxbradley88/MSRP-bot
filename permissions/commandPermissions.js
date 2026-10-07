@@ -48,6 +48,10 @@ const commandPermissions = {
 
     'session-shutdown': [
         '1548126738876342272'
+    ],
+
+    'force-shutdown': [
+        '1548126738876342272'
     ]
 };
 
