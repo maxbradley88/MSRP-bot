@@ -18,94 +18,165 @@ const {
     TextInputStyle
 } = require('discord.js');
 
-const { getMelonlyMemberByDiscordId } = require('../sessions/melonlyApi');
+const {
+    getMelonlyMemberByDiscordId,
+    getMelonlyRobloxConnectionByDiscordId
+} = require('../sessions/melonlyApi');
 
-const DATA_FILE = path.join(__dirname, 'roleBindings.json');
+const DEFAULT_FILE = path.join(__dirname, 'roleBindings.json');
+const DATA_FILE = path.join(__dirname, 'roleBindings.runtime.json');
+
 const syncLocks = new Map();
 const robloxCache = new Map();
+const editSessions = new Map();
 
 const command = new SlashCommandBuilder()
     .setName('send-role-dashboard')
     .setDescription('Sends the role binding and nickname management dashboard.');
 
+function blankConfig() {
+    return {
+        dashboard: { channelId: null, messageId: null },
+        bindings: [],
+        nicknameRules: [],
+        lastRoleSyncAt: null,
+        lastMemberSyncAt: null,
+        lastNameSyncAt: null
+    };
+}
+
+function ensureConfigShape(config) {
+    const value = config && typeof config === 'object' ? config : blankConfig();
+    value.dashboard ||= { channelId: null, messageId: null };
+    value.bindings ||= [];
+    value.nicknameRules ||= [];
+    value.lastRoleSyncAt ||= null;
+    value.lastMemberSyncAt ||= null;
+    value.lastNameSyncAt ||= null;
+    return value;
+}
+
 function loadConfig() {
     try {
-        const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-        parsed.dashboard ||= { channelId: null, messageId: null };
-        parsed.bindings ||= [];
-        parsed.nicknameRules ||= [];
-        return parsed;
+        if (!fs.existsSync(DATA_FILE)) {
+            const seed = fs.existsSync(DEFAULT_FILE)
+                ? ensureConfigShape(JSON.parse(fs.readFileSync(DEFAULT_FILE, 'utf8')))
+                : blankConfig();
+            fs.writeFileSync(DATA_FILE, `${JSON.stringify(seed, null, 2)}\n`, 'utf8');
+            return seed;
+        }
+        return ensureConfigShape(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
     } catch (error) {
         console.error('[ROLE BINDINGS] Failed to load configuration:', error);
-        return { dashboard: { channelId: null, messageId: null }, bindings: [], nicknameRules: [] };
+        return blankConfig();
     }
 }
 
 function saveConfig(config) {
-    fs.writeFileSync(DATA_FILE, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(DATA_FILE, `${JSON.stringify(ensureConfigShape(config), null, 2)}\n`, 'utf8');
 }
 
 function uniqueIds(values) {
     return [...new Set((values || []).map(String).filter(Boolean))];
 }
 
-function bindingLabel(binding, index) {
-    return String(binding.name || `Binding ${index + 1}`).slice(0, 100);
+function canManage(interaction) {
+    return Boolean(
+        interaction.memberPermissions?.has('Administrator') ||
+        interaction.member?.roles?.cache?.has('1547525713853288448')
+    );
 }
 
-function roleList(ids) {
-    const clean = uniqueIds(ids);
-    return clean.length ? clean.map(id => `<@&${id}>`).join(', ') : '*None*';
+function timestampText(value) {
+    if (!value) return 'Not yet';
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) return 'Not yet';
+    return `<t:${Math.floor(ms / 1000)}:R>`;
+}
+
+function roleName(guild, roleId) {
+    return guild?.roles?.cache?.get(roleId)?.name || 'Deleted role';
+}
+
+function roleNames(guild, ids, limit = 4) {
+    const names = uniqueIds(ids).map(id => roleName(guild, id));
+    if (!names.length) return 'None';
+    if (names.length <= limit) return names.join(', ');
+    return `${names.slice(0, limit).join(', ')} +${names.length - limit}`;
+}
+
+function bindingOptionLabel(guild, binding) {
+    const triggers = uniqueIds(binding.triggerRoleIds);
+    const linked = uniqueIds(binding.linkedRoleIds);
+    const firstTrigger = roleName(guild, triggers[0] || '');
+    const firstLinked = roleName(guild, linked[0] || '');
+    const left = triggers.length > 1 ? `${firstTrigger} +${triggers.length - 1}` : firstTrigger;
+    const right = linked.length > 1 ? `${firstLinked} +${linked.length - 1}` : firstLinked;
+    return `${left} → ${right}`.slice(0, 100);
+}
+
+function nameRuleOptionLabel(guild, rule) {
+    const prefix = rule.prefix || 'No prefix';
+    return `${prefix} • ${roleName(guild, rule.roleId)}`.slice(0, 100);
+}
+
+function componentsV2Reply(container) {
+    return {
+        flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+        components: [container]
+    };
 }
 
 function buildDashboardPayload(config) {
-    const bindingLines = config.bindings.length
-        ? config.bindings.map((binding, i) =>
-            `**${i + 1}. ${binding.name || 'Role Binding'}**\n${roleList(binding.triggerRoleIds)} → ${roleList(binding.linkedRoleIds)}`
-        ).join('\n\n')
-        : '*No role bindings configured.*';
-
-    const nickLines = config.nicknameRules.length
-        ? config.nicknameRules.map(rule => {
-            const mode = rule.nameMode === 'discord_username'
-                ? 'Discord username'
-                : rule.nameMode === 'display_roblox'
-                    ? 'Display name (Roblox username)'
-                    : 'No automatic name';
-            const excludes = rule.excludedRoleIds?.length
-                ? ` • excludes ${roleList(rule.excludedRoleIds)}`
-                : '';
-            return `**${rule.prefix || 'No prefix'}** • <@&${rule.roleId}> • ${mode}${excludes}`;
-        }).join('\n')
-        : '*No nickname rules configured.*';
-
     const container = new ContainerBuilder()
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                '## ⚙️ Role & Naming Dashboard\nManage automatic role bindings and nickname formats. A member only keeps an automatically-managed role while at least one binding requires it.'
+                '## ⚙️ Role Management\nAutomatic role binding and staff nickname management.'
             )
         )
         .addSeparatorComponents(new SeparatorBuilder())
         .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(`### 🔗 Role bindings\n${bindingLines.slice(0, 3900)}`)
-        )
-        .addSeparatorComponents(new SeparatorBuilder())
-        .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(`### 🏷️ Naming rules\n${nickLines.slice(0, 3900)}`)
+            new TextDisplayBuilder().setContent(
+                `### System status\n` +
+                `🔗 **Role bindings:** ${config.bindings.length}\n` +
+                `🏷️ **Naming rules:** ${config.nicknameRules.length}\n` +
+                `🔄 **Role list synced:** ${timestampText(config.lastRoleSyncAt)}\n` +
+                `👥 **Members synced:** ${timestampText(config.lastMemberSyncAt)}\n` +
+                `✏️ **Names synced:** ${timestampText(config.lastNameSyncAt)}`
+            )
         )
         .addSeparatorComponents(new SeparatorBuilder())
         .addActionRowComponents(
             new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('rolebind_add').setLabel('Add Binding').setEmoji('🔗').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('rolebind_edit').setLabel('Edit Binding').setEmoji('✏️').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId('rolename_add').setLabel('Add Name Rule').setEmoji('🏷️').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('rolename_edit').setLabel('Edit Name Rule').setEmoji('📝').setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder()
+                    .setCustomId('rolebind_manage')
+                    .setLabel('Role Bindings')
+                    .setEmoji('🔗')
+                    .setStyle(ButtonStyle.Primary),
+                new ButtonBuilder()
+                    .setCustomId('rolename_manage')
+                    .setLabel('Name Rules')
+                    .setEmoji('🏷️')
+                    .setStyle(ButtonStyle.Primary)
             )
         )
         .addActionRowComponents(
             new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('rolebind_sync_roles').setLabel('Sync Roles').setEmoji('🔄').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId('rolebind_sync_members').setLabel('Sync Members').setEmoji('👥').setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder()
+                    .setCustomId('rolebind_sync_roles')
+                    .setLabel('Sync Roles')
+                    .setEmoji('🔄')
+                    .setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder()
+                    .setCustomId('rolebind_sync_members')
+                    .setLabel('Sync Members')
+                    .setEmoji('👥')
+                    .setStyle(ButtonStyle.Success),
+                new ButtonBuilder()
+                    .setCustomId('rolename_sync_names')
+                    .setLabel('Sync Names')
+                    .setEmoji('✏️')
+                    .setStyle(ButtonStyle.Secondary)
             )
         );
 
@@ -129,138 +200,285 @@ async function executeDashboard(interaction) {
     const message = await interaction.channel.send(buildDashboardPayload(config));
     config.dashboard = { channelId: interaction.channelId, messageId: message.id };
     saveConfig(config);
-    await interaction.reply({ content: '✅ Role & Naming Dashboard sent.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: '✅ Role Management Dashboard sent.', flags: MessageFlags.Ephemeral });
 }
 
-function makeBindingModal(binding = null) {
-    const editing = Boolean(binding);
-    const id = binding?.id || `binding-${Date.now()}`;
-    const modal = new ModalBuilder()
-        .setCustomId(`rolebind_modal:${id}:${editing ? 'edit' : 'new'}`)
-        .setTitle(editing ? 'Edit Role Binding' : 'Create Role Binding');
+function sessionKey(interaction, type) {
+    return `${interaction.guildId}:${interaction.user.id}:${type}`;
+}
+
+function setEditState(interaction, type, state) {
+    editSessions.set(sessionKey(interaction, type), {
+        ...state,
+        touchedAt: Date.now()
+    });
+}
+
+function getEditState(interaction, type) {
+    const key = sessionKey(interaction, type);
+    const state = editSessions.get(key);
+    if (!state) return null;
+    if (Date.now() - state.touchedAt > 30 * 60 * 1000) {
+        editSessions.delete(key);
+        return null;
+    }
+    state.touchedAt = Date.now();
+    return state;
+}
+
+function clearEditState(interaction, type) {
+    editSessions.delete(sessionKey(interaction, type));
+}
+
+function buildBindingManager(guild, config) {
+    const container = new ContainerBuilder()
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                '## 🔗 Role Bindings\nChoose an existing binding to edit, or create a new one. Role names are shown as plain text so role colours do not affect readability.'
+            )
+        );
+
+    if (config.bindings.length) {
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId('rolebind_manager_select')
+            .setPlaceholder('Choose a role binding…')
+            .addOptions(
+                config.bindings.slice(0, 25).map(binding =>
+                    new StringSelectMenuOptionBuilder()
+                        .setLabel(bindingOptionLabel(guild, binding))
+                        .setValue(binding.id)
+                        .setDescription(`${uniqueIds(binding.triggerRoleIds).length} trigger role(s) • ${uniqueIds(binding.linkedRoleIds).length} linked role(s)`.slice(0, 100))
+                )
+            );
+        container.addSeparatorComponents(new SeparatorBuilder());
+        container.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    } else {
+        container.addSeparatorComponents(new SeparatorBuilder());
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent('*No bindings configured yet.*'));
+    }
+
+    container
+        .addActionRowComponents(
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('rolebind_new').setLabel('New Binding').setEmoji('➕').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('rolebind_manager_close').setLabel('Close').setStyle(ButtonStyle.Secondary)
+            )
+        );
+
+    return container;
+}
+
+function buildBindingEditor(guild, state) {
+    const validTriggers = uniqueIds(state.triggerRoleIds).filter(id => guild.roles.cache.has(id)).slice(0, 25);
+    const validLinked = uniqueIds(state.linkedRoleIds).filter(id => guild.roles.cache.has(id)).slice(0, 25);
 
     const triggers = new RoleSelectMenuBuilder()
-        .setCustomId('binding_triggers')
+        .setCustomId('rolebind_editor_triggers')
+        .setPlaceholder('Choose trigger roles…')
         .setMinValues(1)
-        .setMaxValues(25)
-        .setPlaceholder('Roles that activate this binding');
-    if (binding?.triggerRoleIds?.length) triggers.setDefaultRoles(...binding.triggerRoleIds);
+        .setMaxValues(25);
+    if (validTriggers.length) triggers.setDefaultRoles(...validTriggers);
 
     const linked = new RoleSelectMenuBuilder()
-        .setCustomId('binding_linked')
+        .setCustomId('rolebind_editor_linked')
+        .setPlaceholder('Choose roles to automatically give…')
         .setMinValues(1)
-        .setMaxValues(25)
-        .setPlaceholder('Roles automatically given while active');
-    if (binding?.linkedRoleIds?.length) linked.setDefaultRoles(...binding.linkedRoleIds);
+        .setMaxValues(25);
+    if (validLinked.length) linked.setDefaultRoles(...validLinked);
 
-    const name = new TextInputBuilder()
-        .setCustomId('binding_name')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false)
-        .setMaxLength(60)
-        .setPlaceholder('Optional label, e.g. Management');
-    if (binding?.name) name.setValue(binding.name);
+    const title = state.isNew ? '## ➕ New Role Binding' : '## ✏️ Edit Role Binding';
+    const container = new ContainerBuilder()
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `${title}\n` +
+                `**If they have:** ${roleNames(guild, validTriggers)}\n` +
+                `**Automatically give:** ${roleNames(guild, validLinked)}\n\n` +
+                '*Use the search box in Discord’s role picker to find any server role. You can select up to 25 roles in each side.*'
+            )
+        )
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Trigger roles'))
+        .addActionRowComponents(new ActionRowBuilder().addComponents(triggers))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Roles to give'))
+        .addActionRowComponents(new ActionRowBuilder().addComponents(linked))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addActionRowComponents(
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('rolebind_editor_save').setLabel('Save').setEmoji('💾').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('rolebind_editor_delete').setLabel('Delete').setEmoji('🗑️').setStyle(ButtonStyle.Danger).setDisabled(state.isNew),
+                new ButtonBuilder().setCustomId('rolebind_editor_back').setLabel('Back').setStyle(ButtonStyle.Secondary)
+            )
+        );
 
-    modal.addLabelComponents(
-        new LabelBuilder().setLabel('If they have ANY of these roles').setRoleSelectMenuComponent(triggers),
-        new LabelBuilder().setLabel('Give them ALL of these roles').setRoleSelectMenuComponent(linked),
-        new LabelBuilder().setLabel('Optional binding name').setTextInputComponent(name)
-    );
-    return modal;
+    return container;
 }
 
-function makeNameModal(rule = null) {
-    const editing = Boolean(rule);
-    const id = rule?.id || `nick-${Date.now()}`;
-    const modal = new ModalBuilder()
-        .setCustomId(`rolename_modal:${id}:${editing ? 'edit' : 'new'}`)
-        .setTitle(editing ? 'Edit Naming Rule' : 'Create Naming Rule');
+function buildNameManager(guild, config) {
+    const container = new ContainerBuilder()
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                '## 🏷️ Name Rules\nThe highest configured Discord role a member has controls their prefix and name format.'
+            )
+        );
 
+    if (config.nicknameRules.length) {
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId('rolename_manager_select')
+            .setPlaceholder('Choose a naming rule…')
+            .addOptions(
+                config.nicknameRules.slice(0, 25).map(rule =>
+                    new StringSelectMenuOptionBuilder()
+                        .setLabel(nameRuleOptionLabel(guild, rule))
+                        .setValue(rule.id)
+                        .setDescription(
+                            rule.nameMode === 'discord_username'
+                                ? 'Discord username'
+                                : 'Display name (Roblox username when available)'
+                        )
+                )
+            );
+        container.addSeparatorComponents(new SeparatorBuilder());
+        container.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    } else {
+        container.addSeparatorComponents(new SeparatorBuilder());
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent('*No naming rules configured yet.*'));
+    }
+
+    container.addActionRowComponents(
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('rolename_new').setLabel('New Name Rule').setEmoji('➕').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('rolename_manager_close').setLabel('Close').setStyle(ButtonStyle.Secondary)
+        )
+    );
+
+    return container;
+}
+
+function buildNameEditor(guild, state) {
     const role = new RoleSelectMenuBuilder()
-        .setCustomId('name_role')
+        .setCustomId('rolename_editor_role')
+        .setPlaceholder('Choose the role for this name rule…')
         .setMinValues(1)
-        .setMaxValues(1)
-        .setPlaceholder('Role that activates this name');
-    if (rule?.roleId) role.setDefaultRoles(rule.roleId);
+        .setMaxValues(1);
+    if (state.roleId && guild.roles.cache.has(state.roleId)) role.setDefaultRoles(state.roleId);
 
-    const prefix = new TextInputBuilder()
-        .setCustomId('name_prefix')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false)
-        .setMaxLength(16)
-        .setPlaceholder('Letters only, e.g. CD or F');
-    if (rule?.prefix) prefix.setValue(rule.prefix);
-
-    const format = new StringSelectMenuBuilder()
-        .setCustomId('name_mode')
+    const mode = new StringSelectMenuBuilder()
+        .setCustomId('rolename_editor_mode')
+        .setPlaceholder('Choose name format…')
         .setMinValues(1)
         .setMaxValues(1)
         .addOptions(
             new StringSelectMenuOptionBuilder()
                 .setLabel('Display name (Roblox username)')
-                .setValue('display_roblox')
                 .setDescription('Example: CD・Max (RobloxName)')
-                .setDefault(rule?.nameMode !== 'discord_username'),
+                .setValue('display_roblox')
+                .setDefault(state.nameMode !== 'discord_username'),
             new StringSelectMenuOptionBuilder()
                 .setLabel('Discord username')
-                .setValue('discord_username')
                 .setDescription('Example: UNVERIFIED・maxbradley')
-                .setDefault(rule?.nameMode === 'discord_username')
+                .setValue('discord_username')
+                .setDefault(state.nameMode === 'discord_username')
         );
 
+    const validExcludes = uniqueIds(state.excludedRoleIds).filter(id => guild.roles.cache.has(id)).slice(0, 25);
     const excludes = new RoleSelectMenuBuilder()
-        .setCustomId('name_excludes')
+        .setCustomId('rolename_editor_excludes')
+        .setPlaceholder('Optional excluded roles…')
         .setMinValues(0)
-        .setMaxValues(25)
-        .setPlaceholder('Optional roles that block this naming rule');
-    if (rule?.excludedRoleIds?.length) excludes.setDefaultRoles(...rule.excludedRoleIds);
+        .setMaxValues(25);
+    if (validExcludes.length) excludes.setDefaultRoles(...validExcludes);
 
-    modal.addLabelComponents(
-        new LabelBuilder().setLabel('Role').setRoleSelectMenuComponent(role),
-        new LabelBuilder().setLabel('Prefix').setDescription('Just the prefix letters; the bot adds ・ automatically.').setTextInputComponent(prefix),
-        new LabelBuilder().setLabel('Name format').setStringSelectMenuComponent(format),
-        new LabelBuilder().setLabel('Optional excluded roles').setRoleSelectMenuComponent(excludes)
-    );
-    return modal;
+    const roleText = state.roleId ? roleName(guild, state.roleId) : 'Not selected';
+    const modeText = state.nameMode === 'discord_username' ? 'Discord username' : 'Display name (Roblox username)';
+    const previewPrefix = state.prefix || 'No prefix';
+
+    const container = new ContainerBuilder()
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `${state.isNew ? '## ➕ New Name Rule' : '## ✏️ Edit Name Rule'}\n` +
+                `**Role:** ${roleText}\n` +
+                `**Prefix:** ${previewPrefix}\n` +
+                `**Format:** ${modeText}\n` +
+                `**Excluded roles:** ${roleNames(guild, validExcludes)}\n\n` +
+                '*The prefix box only needs letters such as `CD`, `F`, or `MGT`. The bot adds `・` automatically.*'
+            )
+        )
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Role'))
+        .addActionRowComponents(new ActionRowBuilder().addComponents(role))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Name format'))
+        .addActionRowComponents(new ActionRowBuilder().addComponents(mode))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Optional excluded roles'))
+        .addActionRowComponents(new ActionRowBuilder().addComponents(excludes))
+        .addActionRowComponents(
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('rolename_editor_prefix').setLabel('Set Prefix').setEmoji('🔤').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('rolename_editor_clear_excludes').setLabel('Clear Exclusions').setStyle(ButtonStyle.Secondary).setDisabled(!validExcludes.length)
+            )
+        )
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addActionRowComponents(
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('rolename_editor_save').setLabel('Save').setEmoji('💾').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('rolename_editor_delete').setLabel('Delete').setEmoji('🗑️').setStyle(ButtonStyle.Danger).setDisabled(state.isNew),
+                new ButtonBuilder().setCustomId('rolename_editor_back').setLabel('Back').setStyle(ButtonStyle.Secondary)
+            )
+        );
+
+    return container;
 }
 
-function editSelectPayload(items, type) {
-    const isBinding = type === 'binding';
-    const menu = new StringSelectMenuBuilder()
-        .setCustomId(isBinding ? 'rolebind_edit_select' : 'rolename_edit_select')
-        .setPlaceholder(isBinding ? 'Choose a binding to edit...' : 'Choose a naming rule to edit...')
-        .addOptions(items.slice(0, 25).map((item, i) =>
-            new StringSelectMenuOptionBuilder()
-                .setLabel(isBinding ? bindingLabel(item, i) : `${item.prefix || 'No prefix'} — ${item.roleId}`.slice(0, 100))
-                .setValue(item.id)
-        ));
-    return {
-        content: isBinding ? '✏️ Select the role binding you want to edit.' : '📝 Select the naming rule you want to edit.',
-        components: [new ActionRowBuilder().addComponents(menu)],
-        flags: MessageFlags.Ephemeral
-    };
+function makePrefixModal(state) {
+    const prefix = new TextInputBuilder()
+        .setCustomId('name_prefix')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setMaxLength(16)
+        .setPlaceholder('Example: CD, F, MGT');
+    if (state.prefix) prefix.setValue(state.prefix);
+
+    return new ModalBuilder()
+        .setCustomId('rolename_prefix_modal')
+        .setTitle('Set nickname prefix')
+        .addLabelComponents(
+            new LabelBuilder()
+                .setLabel('Prefix letters')
+                .setDescription('Leave blank for no prefix.')
+                .setTextInputComponent(prefix)
+        );
 }
 
 function cleanupDeletedRoles(guild, config) {
     const exists = id => guild.roles.cache.has(id);
     const beforeBindings = config.bindings.length;
     const beforeNames = config.nicknameRules.length;
+    let cleanedReferences = 0;
 
     config.bindings = config.bindings
-        .map(binding => ({
-            ...binding,
-            triggerRoleIds: uniqueIds(binding.triggerRoleIds).filter(exists),
-            linkedRoleIds: uniqueIds(binding.linkedRoleIds).filter(exists)
-        }))
+        .map(binding => {
+            const beforeTrigger = uniqueIds(binding.triggerRoleIds).length;
+            const beforeLinked = uniqueIds(binding.linkedRoleIds).length;
+            const triggerRoleIds = uniqueIds(binding.triggerRoleIds).filter(exists);
+            const linkedRoleIds = uniqueIds(binding.linkedRoleIds).filter(exists);
+            cleanedReferences += beforeTrigger - triggerRoleIds.length;
+            cleanedReferences += beforeLinked - linkedRoleIds.length;
+            return { ...binding, triggerRoleIds, linkedRoleIds };
+        })
         .filter(binding => binding.triggerRoleIds.length && binding.linkedRoleIds.length);
 
     config.nicknameRules = config.nicknameRules
         .filter(rule => exists(rule.roleId))
-        .map(rule => ({ ...rule, excludedRoleIds: uniqueIds(rule.excludedRoleIds).filter(exists) }));
+        .map(rule => {
+            const before = uniqueIds(rule.excludedRoleIds).length;
+            const excludedRoleIds = uniqueIds(rule.excludedRoleIds).filter(exists);
+            cleanedReferences += before - excludedRoleIds.length;
+            return { ...rule, excludedRoleIds };
+        });
 
     return {
         removedBindings: beforeBindings - config.bindings.length,
-        removedNames: beforeNames - config.nicknameRules.length
+        removedNames: beforeNames - config.nicknameRules.length,
+        cleanedReferences
     };
 }
 
@@ -284,74 +502,116 @@ function extractRobloxUsername(memberData) {
 async function getRobloxUsername(discordId) {
     const cached = robloxCache.get(discordId);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
+
     let value = null;
     try {
-        value = extractRobloxUsername(await getMelonlyMemberByDiscordId(discordId));
+        const connection = await getMelonlyRobloxConnectionByDiscordId(discordId);
+        value = extractRobloxUsername(connection?.data ?? connection);
+        if (!value) {
+            const member = await getMelonlyMemberByDiscordId(discordId);
+            value = extractRobloxUsername(member?.data ?? member);
+        }
     } catch (error) {
-        console.warn(`[ROLE NAMES] Melonly lookup failed for ${discordId}: ${error.message}`);
+        // Naming must continue even if a user is not verified or Melonly is unavailable.
+        // Cache the miss so a bulk sync does not spam the console with the same lookup.
+        value = null;
     }
+
     robloxCache.set(discordId, { value, expiresAt: Date.now() + 15 * 60 * 1000 });
     return value;
 }
 
 async function syncNickname(member, config) {
-    if (!member.manageable) return;
+    if (!member || member.user?.bot) return { status: 'skipped', reason: 'bot' };
+    if (!member.manageable) return { status: 'skipped', reason: 'hierarchy' };
+
     const eligible = config.nicknameRules.filter(rule =>
         member.roles.cache.has(rule.roleId) &&
         !(rule.excludedRoleIds || []).some(id => member.roles.cache.has(id))
     );
-    if (!eligible.length) {
-        const baseName = getDiscordBaseName(member).slice(0, 32);
-        if (member.nickname && member.nickname !== baseName) {
-            await member.setNickname(baseName, 'MSRP automatic naming rule removed');
-        }
-        return;
-    }
 
-    eligible.sort((a, b) => {
-        const ar = member.guild.roles.cache.get(a.roleId)?.position ?? -1;
-        const br = member.guild.roles.cache.get(b.roleId)?.position ?? -1;
-        return br - ar;
-    });
-
-    const rule = eligible[0];
-    const prefix = String(rule.prefix || '').replace(/[^A-Za-z]/g, '').slice(0, 16);
-    const base = getDiscordBaseName(member);
     let newName;
-    if (rule.nameMode === 'discord_username') {
-        newName = prefix ? `${prefix}・${member.user.username}` : member.user.username;
+    if (!eligible.length) {
+        newName = null;
     } else {
-        const roblox = await getRobloxUsername(member.id);
-        const body = roblox ? `${base} (${roblox})` : base;
-        newName = prefix ? `${prefix}・${body}` : body;
+        eligible.sort((a, b) => {
+            const ar = member.guild.roles.cache.get(a.roleId)?.position ?? -1;
+            const br = member.guild.roles.cache.get(b.roleId)?.position ?? -1;
+            return br - ar;
+        });
+
+        const rule = eligible[0];
+        const prefix = String(rule.prefix || '').replace(/[^A-Za-z]/g, '').slice(0, 16);
+        const base = getDiscordBaseName(member);
+
+        if (rule.nameMode === 'discord_username') {
+            newName = prefix ? `${prefix}・${member.user.username}` : member.user.username;
+        } else {
+            const roblox = await getRobloxUsername(member.id);
+            const body = roblox ? `${base} (${roblox})` : base;
+            newName = prefix ? `${prefix}・${body}` : body;
+        }
+        newName = newName.slice(0, 32);
     }
-    newName = newName.slice(0, 32);
-    if (member.nickname !== newName) {
+
+    const current = member.nickname || null;
+    if (current === newName) {
+        return { status: 'unchanged', name: newName };
+    }
+
+    try {
         await member.setNickname(newName, 'MSRP automatic naming rule');
+        return { status: 'changed', name: newName };
+    } catch (error) {
+        return { status: 'failed', reason: error.message };
     }
 }
 
-async function syncMemberInternal(member) {
-    if (!member || member.user?.bot) return;
-    const config = loadConfig();
+async function syncMemberInternal(member, options = {}) {
+    if (!member || member.user?.bot) return { rolesChanged: false, name: { status: 'skipped', reason: 'bot' } };
+    const config = options.config || loadConfig();
+    let rolesChanged = false;
 
-    for (let pass = 0; pass < 6; pass += 1) {
-        const managed = new Set(config.bindings.flatMap(binding => binding.linkedRoleIds || []));
-        const desired = new Set();
-        for (const binding of config.bindings) {
-            if ((binding.triggerRoleIds || []).some(id => member.roles.cache.has(id))) {
-                for (const id of binding.linkedRoleIds || []) desired.add(id);
+    if (!options.namesOnly) {
+        for (let pass = 0; pass < 6; pass += 1) {
+            const managed = new Set(config.bindings.flatMap(binding => binding.linkedRoleIds || []));
+            const desired = new Set();
+
+            for (const binding of config.bindings) {
+                if ((binding.triggerRoleIds || []).some(id => member.roles.cache.has(id))) {
+                    for (const id of binding.linkedRoleIds || []) desired.add(id);
+                }
+            }
+
+            const add = [...desired].filter(id => {
+                const role = member.guild.roles.cache.get(id);
+                return role && role.editable && !member.roles.cache.has(id);
+            });
+            const remove = [...managed].filter(id => {
+                const role = member.guild.roles.cache.get(id);
+                return role && role.editable && member.roles.cache.has(id) && !desired.has(id);
+            });
+
+            if (!add.length && !remove.length) break;
+
+            try {
+                if (add.length) {
+                    await member.roles.add(add, 'MSRP automatic role binding');
+                    rolesChanged = true;
+                }
+                if (remove.length) {
+                    await member.roles.remove(remove, 'MSRP automatic role binding removed');
+                    rolesChanged = true;
+                }
+            } catch (error) {
+                console.warn(`[ROLE BINDINGS] Could not update roles for ${member.user?.tag || member.id}: ${error.message}`);
+                break;
             }
         }
-
-        const add = [...desired].filter(id => !member.roles.cache.has(id) && member.guild.roles.cache.has(id));
-        const remove = [...managed].filter(id => member.roles.cache.has(id) && !desired.has(id) && member.guild.roles.cache.has(id));
-        if (!add.length && !remove.length) break;
-        if (add.length) await member.roles.add(add, 'MSRP automatic role binding');
-        if (remove.length) await member.roles.remove(remove, 'MSRP automatic role binding removed');
     }
 
-    await syncNickname(member, config);
+    const name = await syncNickname(member, config);
+    return { rolesChanged, name };
 }
 
 async function syncMember(member) {
@@ -359,39 +619,105 @@ async function syncMember(member) {
     const next = previous.catch(() => {}).then(() => syncMemberInternal(member));
     syncLocks.set(member.id, next);
     try {
-        await next;
+        return await next;
     } catch (error) {
         console.error(`[ROLE BINDINGS] Failed to sync ${member.user?.tag || member.id}:`, error);
+        return { rolesChanged: false, name: { status: 'failed', reason: error.message } };
     } finally {
         if (syncLocks.get(member.id) === next) syncLocks.delete(member.id);
     }
 }
 
-async function syncAllMembers(guild) {
-    let members = guild.members.cache;
-    try {
-        members = await guild.members.fetch();
-    } catch (error) {
-        console.warn('[ROLE BINDINGS] Full member fetch was rate limited/unavailable; using cached members:', error.message);
+async function listGuildMembers(guild) {
+    const all = new Map();
+    for (const [id, member] of guild.members.cache) all.set(id, member);
+
+    // guild.members.fetch() requests every member through Gateway opcode 8 and is
+    // now aggressively rate limited. Prefer Discord's REST member-list endpoint.
+    if (typeof guild.members.list === 'function') {
+        try {
+            let after;
+            for (let page = 0; page < 25; page += 1) {
+                const batch = await guild.members.list({ limit: 1000, ...(after ? { after } : {}) });
+                const members = [...batch.values()];
+                for (const member of members) all.set(member.id, member);
+                if (members.length < 1000) break;
+                after = members[members.length - 1]?.id;
+                if (!after) break;
+            }
+        } catch (error) {
+            console.warn('[ROLE BINDINGS] REST member listing unavailable; using cached members:', error.message);
+        }
     }
-    let synced = 0;
-    for (const member of members.values()) {
-        if (member.user.bot) continue;
-        await syncMember(member);
-        synced += 1;
+
+    return [...all.values()];
+}
+
+function newSyncStats() {
+    return {
+        members: 0,
+        rolesChanged: 0,
+        namesChanged: 0,
+        namesUnchanged: 0,
+        namesSkippedHierarchy: 0,
+        namesFailed: 0
+    };
+}
+
+function addNameResult(stats, result) {
+    if (!result) return;
+    if (result.status === 'changed') stats.namesChanged += 1;
+    else if (result.status === 'unchanged') stats.namesUnchanged += 1;
+    else if (result.status === 'skipped' && result.reason === 'hierarchy') stats.namesSkippedHierarchy += 1;
+    else if (result.status === 'failed') stats.namesFailed += 1;
+}
+
+async function syncAllMembers(guild, { namesOnly = false } = {}) {
+    const config = loadConfig();
+    const members = await listGuildMembers(guild);
+    const stats = newSyncStats();
+
+    for (const member of members) {
+        if (member.user?.bot) continue;
+        stats.members += 1;
+        const result = await syncMemberInternal(member, { config, namesOnly });
+        if (result.rolesChanged) stats.rolesChanged += 1;
+        addNameResult(stats, result.name);
     }
-    return synced;
+
+    return stats;
+}
+
+function syncSummary(stats, namesOnly = false) {
+    if (namesOnly) {
+        return `✅ Name sync finished for **${stats.members}** members.\n` +
+            `✏️ Changed: **${stats.namesChanged}**\n` +
+            `➖ Already correct: **${stats.namesUnchanged}**\n` +
+            `🔒 Skipped (bot role too low / owner): **${stats.namesSkippedHierarchy}**\n` +
+            `❌ Failed: **${stats.namesFailed}**`;
+    }
+
+    return `✅ Member sync finished for **${stats.members}** members.\n` +
+        `🔗 Members with role changes: **${stats.rolesChanged}**\n` +
+        `✏️ Names changed: **${stats.namesChanged}**\n` +
+        `🔒 Names skipped by hierarchy: **${stats.namesSkippedHierarchy}**\n` +
+        `❌ Name failures: **${stats.namesFailed}**`;
+}
+
+async function showOrUpdate(interaction, container) {
+    const payload = { components: [container] };
+    if (interaction.isButton() || interaction.isAnySelectMenu()) {
+        await interaction.update(payload);
+    } else {
+        await interaction.reply(componentsV2Reply(container));
+    }
 }
 
 async function handleInteraction(interaction) {
     const id = interaction.customId;
     if (!id || (!id.startsWith('rolebind_') && !id.startsWith('rolename_'))) return false;
 
-    const canManage =
-        interaction.memberPermissions?.has('Administrator') ||
-        interaction.member?.roles?.cache?.has('1547525713853288448');
-
-    if (!canManage) {
+    if (!canManage(interaction)) {
         await interaction.reply({
             content: '❌ You do not have permission to manage role bindings.',
             flags: MessageFlags.Ephemeral
@@ -401,86 +727,309 @@ async function handleInteraction(interaction) {
 
     const config = loadConfig();
 
+    // Old dashboard IDs remain supported so the previous dashboard does not break.
     if (id === 'rolebind_add') {
-        await interaction.showModal(makeBindingModal());
+        setEditState(interaction, 'binding', { id: `binding-${Date.now()}`, isNew: true, triggerRoleIds: [], linkedRoleIds: [] });
+        await interaction.reply(componentsV2Reply(buildBindingEditor(interaction.guild, getEditState(interaction, 'binding'))));
+        return true;
+    }
+    if (id === 'rolebind_edit' || id === 'rolebind_manage') {
+        clearEditState(interaction, 'binding');
+        await interaction.reply(componentsV2Reply(buildBindingManager(interaction.guild, config)));
         return true;
     }
     if (id === 'rolename_add') {
-        await interaction.showModal(makeNameModal());
+        setEditState(interaction, 'name', { id: `nick-${Date.now()}`, isNew: true, roleId: null, prefix: '', nameMode: 'display_roblox', excludedRoleIds: [] });
+        await interaction.reply(componentsV2Reply(buildNameEditor(interaction.guild, getEditState(interaction, 'name'))));
         return true;
     }
-    if (id === 'rolebind_edit') {
-        if (!config.bindings.length) await interaction.reply({ content: 'There are no role bindings to edit.', flags: MessageFlags.Ephemeral });
-        else await interaction.reply(editSelectPayload(config.bindings, 'binding'));
+    if (id === 'rolename_edit' || id === 'rolename_manage') {
+        clearEditState(interaction, 'name');
+        await interaction.reply(componentsV2Reply(buildNameManager(interaction.guild, config)));
         return true;
     }
-    if (id === 'rolename_edit') {
-        if (!config.nicknameRules.length) await interaction.reply({ content: 'There are no naming rules to edit.', flags: MessageFlags.Ephemeral });
-        else await interaction.reply(editSelectPayload(config.nicknameRules, 'name'));
+
+    if (id === 'rolebind_manager_close' || id === 'rolename_manager_close') {
+        const closed = new ContainerBuilder().addTextDisplayComponents(
+            new TextDisplayBuilder().setContent('✅ Manager closed.')
+        );
+        await interaction.update({ components: [closed] });
         return true;
     }
-    if (id === 'rolebind_edit_select' && interaction.isStringSelectMenu()) {
+
+    if (id === 'rolebind_new') {
+        setEditState(interaction, 'binding', { id: `binding-${Date.now()}`, isNew: true, triggerRoleIds: [], linkedRoleIds: [] });
+        await interaction.update({ components: [buildBindingEditor(interaction.guild, getEditState(interaction, 'binding'))] });
+        return true;
+    }
+
+    if (id === 'rolebind_manager_select' && interaction.isStringSelectMenu()) {
         const binding = config.bindings.find(x => x.id === interaction.values[0]);
-        if (!binding) await interaction.reply({ content: 'That binding no longer exists.', flags: MessageFlags.Ephemeral });
-        else await interaction.showModal(makeBindingModal(binding));
+        if (!binding) {
+            await interaction.reply({ content: '❌ That binding no longer exists.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        setEditState(interaction, 'binding', {
+            id: binding.id,
+            isNew: false,
+            triggerRoleIds: uniqueIds(binding.triggerRoleIds),
+            linkedRoleIds: uniqueIds(binding.linkedRoleIds)
+        });
+        await interaction.update({ components: [buildBindingEditor(interaction.guild, getEditState(interaction, 'binding'))] });
         return true;
     }
-    if (id === 'rolename_edit_select' && interaction.isStringSelectMenu()) {
-        const rule = config.nicknameRules.find(x => x.id === interaction.values[0]);
-        if (!rule) await interaction.reply({ content: 'That naming rule no longer exists.', flags: MessageFlags.Ephemeral });
-        else await interaction.showModal(makeNameModal(rule));
+
+    if (id === 'rolebind_editor_triggers' && interaction.isRoleSelectMenu()) {
+        const state = getEditState(interaction, 'binding');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Role Bindings again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        state.triggerRoleIds = uniqueIds(interaction.values);
+        setEditState(interaction, 'binding', state);
+        await interaction.update({ components: [buildBindingEditor(interaction.guild, state)] });
         return true;
     }
-    if (id.startsWith('rolebind_modal:') && interaction.isModalSubmit()) {
-        const [, bindingId] = id.split(':');
+
+    if (id === 'rolebind_editor_linked' && interaction.isRoleSelectMenu()) {
+        const state = getEditState(interaction, 'binding');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Role Bindings again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        state.linkedRoleIds = uniqueIds(interaction.values);
+        setEditState(interaction, 'binding', state);
+        await interaction.update({ components: [buildBindingEditor(interaction.guild, state)] });
+        return true;
+    }
+
+    if (id === 'rolebind_editor_save') {
+        const state = getEditState(interaction, 'binding');
+        if (!state || !state.triggerRoleIds?.length || !state.linkedRoleIds?.length) {
+            await interaction.reply({ content: '❌ Choose at least one trigger role and one role to give.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        const currentConfig = loadConfig();
         const binding = {
-            id: bindingId,
-            name: interaction.fields.getTextInputValue('binding_name').trim() || 'Role Binding',
-            triggerRoleIds: uniqueIds([...interaction.fields.getSelectedRoles('binding_triggers', true).keys()]),
-            linkedRoleIds: uniqueIds([...interaction.fields.getSelectedRoles('binding_linked', true).keys()])
+            id: state.id,
+            triggerRoleIds: uniqueIds(state.triggerRoleIds),
+            linkedRoleIds: uniqueIds(state.linkedRoleIds)
         };
-        const idx = config.bindings.findIndex(x => x.id === bindingId);
-        if (idx >= 0) config.bindings[idx] = binding; else config.bindings.push(binding);
-        saveConfig(config);
-        await interaction.reply({ content: '💾 Role binding saved.', flags: MessageFlags.Ephemeral });
+        const index = currentConfig.bindings.findIndex(x => x.id === state.id);
+        if (index >= 0) currentConfig.bindings[index] = { ...currentConfig.bindings[index], ...binding };
+        else currentConfig.bindings.push(binding);
+        saveConfig(currentConfig);
+        clearEditState(interaction, 'binding');
+        await interaction.update({ components: [buildBindingManager(interaction.guild, currentConfig)] });
         await refreshDashboard(interaction.client);
         return true;
     }
-    if (id.startsWith('rolename_modal:') && interaction.isModalSubmit()) {
-        const [, ruleId] = id.split(':');
-        const prefix = interaction.fields.getTextInputValue('name_prefix').replace(/[^A-Za-z]/g, '').slice(0, 16);
-        const selectedRoles = interaction.fields.getSelectedRoles('name_role', true);
-        const exclusions = interaction.fields.getSelectedRoles('name_excludes', false);
+
+    if (id === 'rolebind_editor_delete') {
+        const state = getEditState(interaction, 'binding');
+        if (!state || state.isNew) {
+            await interaction.reply({ content: '❌ Nothing to delete.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        const currentConfig = loadConfig();
+        currentConfig.bindings = currentConfig.bindings.filter(x => x.id !== state.id);
+        saveConfig(currentConfig);
+        clearEditState(interaction, 'binding');
+        await interaction.update({ components: [buildBindingManager(interaction.guild, currentConfig)] });
+        await refreshDashboard(interaction.client);
+        return true;
+    }
+
+    if (id === 'rolebind_editor_back') {
+        clearEditState(interaction, 'binding');
+        await interaction.update({ components: [buildBindingManager(interaction.guild, loadConfig())] });
+        return true;
+    }
+
+    if (id === 'rolename_new') {
+        setEditState(interaction, 'name', {
+            id: `nick-${Date.now()}`,
+            isNew: true,
+            roleId: null,
+            prefix: '',
+            nameMode: 'display_roblox',
+            excludedRoleIds: []
+        });
+        await interaction.update({ components: [buildNameEditor(interaction.guild, getEditState(interaction, 'name'))] });
+        return true;
+    }
+
+    if (id === 'rolename_manager_select' && interaction.isStringSelectMenu()) {
+        const rule = config.nicknameRules.find(x => x.id === interaction.values[0]);
+        if (!rule) {
+            await interaction.reply({ content: '❌ That naming rule no longer exists.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        setEditState(interaction, 'name', {
+            id: rule.id,
+            isNew: false,
+            roleId: rule.roleId,
+            prefix: rule.prefix || '',
+            nameMode: rule.nameMode || 'display_roblox',
+            excludedRoleIds: uniqueIds(rule.excludedRoleIds)
+        });
+        await interaction.update({ components: [buildNameEditor(interaction.guild, getEditState(interaction, 'name'))] });
+        return true;
+    }
+
+    if (id === 'rolename_editor_role' && interaction.isRoleSelectMenu()) {
+        const state = getEditState(interaction, 'name');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Name Rules again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        state.roleId = interaction.values[0] || null;
+        setEditState(interaction, 'name', state);
+        await interaction.update({ components: [buildNameEditor(interaction.guild, state)] });
+        return true;
+    }
+
+    if (id === 'rolename_editor_mode' && interaction.isStringSelectMenu()) {
+        const state = getEditState(interaction, 'name');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Name Rules again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        state.nameMode = interaction.values[0] || 'display_roblox';
+        setEditState(interaction, 'name', state);
+        await interaction.update({ components: [buildNameEditor(interaction.guild, state)] });
+        return true;
+    }
+
+    if (id === 'rolename_editor_excludes' && interaction.isRoleSelectMenu()) {
+        const state = getEditState(interaction, 'name');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Name Rules again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        state.excludedRoleIds = uniqueIds(interaction.values);
+        setEditState(interaction, 'name', state);
+        await interaction.update({ components: [buildNameEditor(interaction.guild, state)] });
+        return true;
+    }
+
+    if (id === 'rolename_editor_clear_excludes') {
+        const state = getEditState(interaction, 'name');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Name Rules again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        state.excludedRoleIds = [];
+        setEditState(interaction, 'name', state);
+        await interaction.update({ components: [buildNameEditor(interaction.guild, state)] });
+        return true;
+    }
+
+    if (id === 'rolename_editor_prefix') {
+        const state = getEditState(interaction, 'name');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Name Rules again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await interaction.showModal(makePrefixModal(state));
+        return true;
+    }
+
+    if (id === 'rolename_prefix_modal' && interaction.isModalSubmit()) {
+        const state = getEditState(interaction, 'name');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Name Rules again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        state.prefix = interaction.fields.getTextInputValue('name_prefix').replace(/[^A-Za-z]/g, '').slice(0, 16);
+        setEditState(interaction, 'name', state);
+        await interaction.reply({ content: `✅ Prefix set to **${state.prefix || 'none'}**. Return to the editor and press **Save** when ready.`, flags: MessageFlags.Ephemeral });
+        return true;
+    }
+
+    if (id === 'rolename_editor_save') {
+        const state = getEditState(interaction, 'name');
+        if (!state || !state.roleId) {
+            await interaction.reply({ content: '❌ Choose the Discord role this naming rule applies to.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        const currentConfig = loadConfig();
         const rule = {
-            id: ruleId,
-            roleId: [...selectedRoles.keys()][0],
-            prefix,
-            nameMode: interaction.fields.getStringSelectValues('name_mode')[0] || 'display_roblox',
-            excludedRoleIds: exclusions ? uniqueIds([...exclusions.keys()]) : []
+            id: state.id,
+            roleId: state.roleId,
+            prefix: String(state.prefix || '').replace(/[^A-Za-z]/g, '').slice(0, 16),
+            nameMode: state.nameMode === 'discord_username' ? 'discord_username' : 'display_roblox',
+            excludedRoleIds: uniqueIds(state.excludedRoleIds)
         };
-        const idx = config.nicknameRules.findIndex(x => x.id === ruleId);
-        if (idx >= 0) config.nicknameRules[idx] = rule; else config.nicknameRules.push(rule);
-        saveConfig(config);
-        await interaction.reply({ content: '💾 Naming rule saved.', flags: MessageFlags.Ephemeral });
+        const index = currentConfig.nicknameRules.findIndex(x => x.id === state.id);
+        if (index >= 0) currentConfig.nicknameRules[index] = rule;
+        else currentConfig.nicknameRules.push(rule);
+        saveConfig(currentConfig);
+        clearEditState(interaction, 'name');
+        await interaction.update({ components: [buildNameManager(interaction.guild, currentConfig)] });
         await refreshDashboard(interaction.client);
         return true;
     }
+
+    if (id === 'rolename_editor_delete') {
+        const state = getEditState(interaction, 'name');
+        if (!state || state.isNew) {
+            await interaction.reply({ content: '❌ Nothing to delete.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        const currentConfig = loadConfig();
+        currentConfig.nicknameRules = currentConfig.nicknameRules.filter(x => x.id !== state.id);
+        saveConfig(currentConfig);
+        clearEditState(interaction, 'name');
+        await interaction.update({ components: [buildNameManager(interaction.guild, currentConfig)] });
+        await refreshDashboard(interaction.client);
+        return true;
+    }
+
+    if (id === 'rolename_editor_back') {
+        clearEditState(interaction, 'name');
+        await interaction.update({ components: [buildNameManager(interaction.guild, loadConfig())] });
+        return true;
+    }
+
     if (id === 'rolebind_sync_roles') {
-        const result = cleanupDeletedRoles(interaction.guild, config);
-        saveConfig(config);
+        const currentConfig = loadConfig();
+        const result = cleanupDeletedRoles(interaction.guild, currentConfig);
+        currentConfig.lastRoleSyncAt = new Date().toISOString();
+        saveConfig(currentConfig);
         await refreshDashboard(interaction.client);
         await interaction.reply({
-            content: `🔄 Roles synced. Removed ${result.removedBindings} invalid binding(s) and ${result.removedNames} invalid naming rule(s). New Discord roles are automatically available in the role pickers.`,
+            content:
+                `✅ Role list refreshed. **${Math.max(0, interaction.guild.roles.cache.size - 1)}** server roles are available in the role pickers.\n` +
+                `Removed **${result.removedBindings}** invalid binding(s), **${result.removedNames}** invalid naming rule(s), and **${result.cleanedReferences}** deleted role reference(s).`,
             flags: MessageFlags.Ephemeral
         });
         return true;
     }
+
     if (id === 'rolebind_sync_members') {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const count = await syncAllMembers(interaction.guild);
-        await interaction.editReply({ content: `✅ Synced role bindings and names for ${count} member(s).` });
+        const stats = await syncAllMembers(interaction.guild, { namesOnly: false });
+        const currentConfig = loadConfig();
+        currentConfig.lastMemberSyncAt = new Date().toISOString();
+        currentConfig.lastNameSyncAt = currentConfig.lastMemberSyncAt;
+        saveConfig(currentConfig);
+        await refreshDashboard(interaction.client);
+        await interaction.editReply({ content: syncSummary(stats, false) });
         return true;
     }
+
+    if (id === 'rolename_sync_names') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const stats = await syncAllMembers(interaction.guild, { namesOnly: true });
+        const currentConfig = loadConfig();
+        currentConfig.lastNameSyncAt = new Date().toISOString();
+        saveConfig(currentConfig);
+        await refreshDashboard(interaction.client);
+        await interaction.editReply({ content: syncSummary(stats, true) });
+        return true;
+    }
+
     return false;
 }
 
@@ -492,36 +1041,13 @@ async function handleGuildMemberUpdate(oldMember, newMember) {
 
 async function handleGuildRoleDelete(role, client) {
     const config = loadConfig();
-    const deletedBindings = config.bindings.filter(binding =>
-        (binding.triggerRoleIds || []).includes(role.id) &&
-        (binding.triggerRoleIds || []).filter(id => id !== role.id && role.guild.roles.cache.has(id)).length === 0
-    );
-    const orphanedLinkedRoles = new Set(deletedBindings.flatMap(binding => binding.linkedRoleIds || []));
-
     cleanupDeletedRoles(role.guild, config);
     saveConfig(config);
 
-    if (orphanedLinkedRoles.size) {
-        for (const member of role.guild.members.cache.values()) {
-            if (member.user.bot) continue;
-            const stillDesired = new Set();
-            for (const binding of config.bindings) {
-                if ((binding.triggerRoleIds || []).some(id => member.roles.cache.has(id))) {
-                    for (const id of binding.linkedRoleIds || []) stillDesired.add(id);
-                }
-            }
-            const toRemove = [...orphanedLinkedRoles].filter(id =>
-                member.roles.cache.has(id) && !stillDesired.has(id) && role.guild.roles.cache.has(id)
-            );
-            if (toRemove.length) {
-                try {
-                    await member.roles.remove(toRemove, 'MSRP role binding trigger deleted');
-                } catch (error) {
-                    console.warn(`[ROLE BINDINGS] Could not remove orphaned roles from ${member.id}: ${error.message}`);
-                }
-            }
-            await syncMember(member);
-        }
+    // Recalculate members from the remaining bindings so a deleted trigger does
+    // not leave stale automatically-managed roles behind.
+    for (const member of role.guild.members.cache.values()) {
+        if (!member.user?.bot) await syncMember(member);
     }
 
     await refreshDashboard(client);

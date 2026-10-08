@@ -83,7 +83,7 @@ function getDiscordIdFromMelonlyMember(member) {
 async function getMelonlyMembers() {
     if (memberCache.expiresAt > Date.now()) return memberCache.members;
 
-    const body = await melonlyRequest('/members');
+    const body = await melonlyRequest('/server/members');
     const members = extractMemberArray(body);
     memberCache = {
         expiresAt: Date.now() + 5 * 60 * 1000,
@@ -93,8 +93,11 @@ async function getMelonlyMembers() {
 }
 
 async function getMelonlyMemberByDiscordId(discordId) {
-    const members = await getMelonlyMembers();
-    return members.find(member => getDiscordIdFromMelonlyMember(member) === String(discordId)) || null;
+    return melonlyRequest(`/server/members/discord/${encodeURIComponent(String(discordId))}`);
+}
+
+async function getMelonlyRobloxConnectionByDiscordId(discordId) {
+    return melonlyRequest(`/verification/discord/${encodeURIComponent(String(discordId))}/roblox`);
 }
 
 async function getMelonlyServerInfo() {
@@ -175,6 +178,7 @@ module.exports = {
     getMelonlySnapshot,
     getMelonlyMembers,
     getMelonlyMemberByDiscordId,
+    getMelonlyRobloxConnectionByDiscordId,
     startMelonlySession,
     stopActiveMelonlyShifts
 };
