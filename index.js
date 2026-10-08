@@ -93,6 +93,10 @@ const {
     logSlashCommand
 } = require('./utils/commandLogger');
 
+const {
+    sendWelcomeMessage
+} = require('./welcome/welcomeMessage');
+
 
 const client = new Client({
 
@@ -1501,9 +1505,13 @@ client.on(
 client.on(
     'guildMemberAdd',
     async member => {
-        await roleBindingSystem.syncMember(
-            member
-        );
+        try {
+            await roleBindingSystem.syncMember(member);
+        } catch (error) {
+            console.warn('[ROLE BINDINGS] New-member sync failed:', error?.message || error);
+        }
+
+        await sendWelcomeMessage(member);
     }
 );
 

@@ -363,17 +363,37 @@ function buildRoleSelector(customId, selectedIds, placeholder, { single = false,
     return menu;
 }
 
+function allVisibleServerRoles(guild) {
+    return [...guild.roles.cache.values()]
+        .filter(role => role.id !== guild.id)
+        .sort((a, b) => b.position - a.position || a.name.localeCompare(b.name));
+}
+
+function roleCatalogPage(guild, page = 0, perPage = 18) {
+    const roles = allVisibleServerRoles(guild);
+    const totalPages = Math.max(1, Math.ceil(roles.length / perPage));
+    const safePage = Math.min(Math.max(Number(page) || 0, 0), totalPages - 1);
+    const slice = roles.slice(safePage * perPage, safePage * perPage + perPage);
+    return {
+        safePage,
+        totalPages,
+        content: slice.length ? slice.map(role => `<@&${role.id}>`).join('  ') : '*No roles found.*'
+    };
+}
+
 function buildBindingEditor(guild, state) {
     const triggerPicker = buildRoleSelector(
         'rolebind_editor_triggers',
         state.triggerRoleIds,
-        'Select the role(s) a member must have...'
+        'Search and select trigger role(s)...'
     );
     const linkedPicker = buildRoleSelector(
         'rolebind_editor_linked',
         state.linkedRoleIds,
-        'Select the role(s) the bot should give...'
+        'Search and select role(s) to give...'
     );
+    const catalog = roleCatalogPage(guild, state.catalogPage || 0);
+    state.catalogPage = catalog.safePage;
 
     const saveButton = applyIcon(
         new ButtonBuilder().setCustomId('rolebind_editor_save').setLabel('Save Binding').setStyle(ButtonStyle.Success),
@@ -390,22 +410,43 @@ function buildBindingEditor(guild, state) {
         guild,
         'back'
     );
+    const previousButton = new ButtonBuilder()
+        .setCustomId('rolebind_catalog_prev')
+        .setLabel('Previous Roles')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(catalog.safePage <= 0);
+    const nextButton = new ButtonBuilder()
+        .setCustomId('rolebind_catalog_next')
+        .setLabel('Next Roles')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(catalog.safePage >= catalog.totalPages - 1);
 
     return new ContainerBuilder()
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                `${state.isNew ? '## Create Role Binding' : '## Edit Role Binding'}\n` +
-                `Choose the real Discord roles below. You can search the **entire server role list** in each selector.\n\n` +
-                `### When a member has\n${roleMentions(guild, state.triggerRoleIds)}\n\n` +
-                `### Automatically give\n${roleMentions(guild, state.linkedRoleIds)}`
+                `${state.isNew ? '## Create Role Binding' : '## Edit Role Binding'}
+` +
+                `Select the real Discord roles below. The role picker is searchable.
+
+` +
+                `**Member must have:** ${roleMentions(guild, state.triggerRoleIds)}
+` +
+                `**Bot will give:** ${roleMentions(guild, state.linkedRoleIds)}`
             )
         )
         .addSeparatorComponents(new SeparatorBuilder())
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Member has'))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Member must have'))
         .addActionRowComponents(new ActionRowBuilder().addComponents(triggerPicker))
-        .addSeparatorComponents(new SeparatorBuilder())
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Bot gives'))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Bot will give'))
         .addActionRowComponents(new ActionRowBuilder().addComponents(linkedPicker))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `### All Server Roles — ${catalog.safePage + 1}/${catalog.totalPages}
+${catalog.content}`
+            )
+        )
+        .addActionRowComponents(new ActionRowBuilder().addComponents(previousButton, nextButton))
         .addSeparatorComponents(new SeparatorBuilder())
         .addActionRowComponents(new ActionRowBuilder().addComponents(saveButton, deleteButton, backButton));
 }
@@ -456,15 +497,17 @@ function buildNameEditor(guild, state) {
     const rolePicker = buildRoleSelector(
         'rolename_editor_role',
         state.roleId ? [state.roleId] : [],
-        'Select the role this name rule belongs to...',
+        'Search and select the role for this name rule...',
         { single: true, required: true }
     );
     const excludePicker = buildRoleSelector(
         'rolename_editor_excludes',
         state.excludedRoleIds,
-        'Optional: select roles that disable this name rule...',
+        'Optional: search and select exclusion roles...',
         { single: false, required: false }
     );
+    const catalog = roleCatalogPage(guild, state.catalogPage || 0);
+    state.catalogPage = catalog.safePage;
 
     const mode = new StringSelectMenuBuilder()
         .setCustomId('rolename_editor_mode')
@@ -509,15 +552,31 @@ function buildNameEditor(guild, state) {
         guild,
         'back'
     );
+    const previousButton = new ButtonBuilder()
+        .setCustomId('rolename_catalog_prev')
+        .setLabel('Previous Roles')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(catalog.safePage <= 0);
+    const nextButton = new ButtonBuilder()
+        .setCustomId('rolename_catalog_next')
+        .setLabel('Next Roles')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(catalog.safePage >= catalog.totalPages - 1);
 
     return new ContainerBuilder()
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                `${state.isNew ? '## Create Name Rule' : '## Edit Name Rule'}\n` +
-                `Choose the real Discord role, set the prefix, then save.\n\n` +
-                `**Applies to:** ${state.roleId ? `<@&${state.roleId}>` : '*Not selected*'}\n` +
-                `**Prefix:** ${state.prefix || '*None*'}\n` +
-                `**Format:** ${state.nameMode === 'discord_username' ? 'Discord username' : 'Discord display name (Roblox username)'}\n` +
+                `${state.isNew ? '## Create Name Rule' : '## Edit Name Rule'}
+` +
+                `Pick the role, choose the name format, set the prefix and save.
+
+` +
+                `**Applies to:** ${state.roleId ? `<@&${state.roleId}>` : '*Not selected*'}
+` +
+                `**Prefix:** ${state.prefix || '*None*'}
+` +
+                `**Format:** ${state.nameMode === 'discord_username' ? 'Discord username' : 'Discord display name (Roblox username)'}
+` +
                 `**Excluded roles:** ${roleMentions(guild, state.excludedRoleIds, 12)}`
             )
         )
@@ -529,6 +588,14 @@ function buildNameEditor(guild, state) {
         .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Optional exclusions'))
         .addActionRowComponents(new ActionRowBuilder().addComponents(excludePicker))
         .addActionRowComponents(new ActionRowBuilder().addComponents(prefixButton, clearButton))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `### All Server Roles — ${catalog.safePage + 1}/${catalog.totalPages}
+${catalog.content}`
+            )
+        )
+        .addActionRowComponents(new ActionRowBuilder().addComponents(previousButton, nextButton))
         .addSeparatorComponents(new SeparatorBuilder())
         .addActionRowComponents(new ActionRowBuilder().addComponents(saveButton, deleteButton, backButton));
 }
@@ -626,65 +693,55 @@ function cleanupDeletedRoles(guild, config) {
 }
 
 function getDiscordBaseName(member) {
-    // Discord profile display name first; fall back to username if no display name is set.
-    const displayName = typeof member?.user?.globalName === 'string'
-        ? member.user.globalName.trim()
-        : '';
-    return displayName || member.user.username;
+    return member.user.globalName || member.user.username;
 }
 
-function extractRobloxIdentity(value, depth = 0, seen = new Set()) {
-    if (value == null || depth > 6) return { username: null, id: null };
-    if (typeof value !== 'object') return { username: null, id: null };
-    if (seen.has(value)) return { username: null, id: null };
+function extractVerifiedRobloxId(value, depth = 0, seen = new Set()) {
+    if (value == null || depth > 6 || typeof value !== 'object') return null;
+    if (seen.has(value)) return null;
     seen.add(value);
 
-    const usernameKeys = [
-        'robloxUsername', 'roblox_username', 'robloxName', 'roblox_name',
-        'username', 'userName', 'name'
-    ];
-    const idKeys = [
-        'robloxId', 'roblox_id', 'robloxUserId', 'roblox_user_id',
-        'userId', 'user_id'
-    ];
-
-    let username = null;
-    let id = null;
-
-    for (const key of usernameKeys) {
-        const candidate = value?.[key];
-        if (typeof candidate === 'string' && candidate.trim() && !/^\d+$/.test(candidate.trim())) {
-            username = candidate.trim();
-            break;
-        }
-    }
-    for (const key of idKeys) {
+    const directKeys = ['robloxId', 'roblox_id', 'robloxUserId', 'roblox_user_id'];
+    for (const key of directKeys) {
         const candidate = value?.[key];
         if ((typeof candidate === 'string' || typeof candidate === 'number') && /^\d+$/.test(String(candidate))) {
-            id = String(candidate);
-            break;
+            return String(candidate);
         }
     }
 
-    const preferredChildren = ['roblox', 'robloxUser', 'roblox_user', 'verification', 'connection', 'user', 'data', 'member'];
+    const preferredChildren = ['roblox', 'robloxUser', 'roblox_user', 'verification', 'connection', 'data', 'member'];
     for (const key of preferredChildren) {
         const child = value?.[key];
-        if (!child || typeof child !== 'object') continue;
-        const nested = extractRobloxIdentity(child, depth + 1, seen);
-        username ||= nested.username;
-        id ||= nested.id;
-        if (username && id) return { username, id };
+        const found = extractVerifiedRobloxId(child, depth + 1, seen);
+        if (found) return found;
     }
 
     for (const child of Object.values(value)) {
         if (!child || typeof child !== 'object') continue;
-        const nested = extractRobloxIdentity(child, depth + 1, seen);
-        username ||= nested.username;
-        id ||= nested.id;
-        if (username && id) break;
+        const found = extractVerifiedRobloxId(child, depth + 1, seen);
+        if (found) return found;
+    }
+    return null;
+}
+
+function extractExplicitRobloxUsername(value, depth = 0, seen = new Set()) {
+    if (value == null || depth > 6 || typeof value !== 'object') return null;
+    if (seen.has(value)) return null;
+    seen.add(value);
+
+    const directKeys = ['robloxUsername', 'roblox_username', 'robloxName', 'roblox_name'];
+    for (const key of directKeys) {
+        const candidate = value?.[key];
+        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
     }
 
-    return { username, id };
+    const robloxChildren = ['roblox', 'robloxUser', 'roblox_user', 'verification', 'connection', 'data'];
+    for (const key of robloxChildren) {
+        const child = value?.[key];
+        const found = extractExplicitRobloxUsername(child, depth + 1, seen);
+        if (found) return found;
+    }
+    return null;
 }
 
 async function resolveRobloxUsernameById(robloxId) {
@@ -703,41 +760,37 @@ async function getRobloxUsername(discordId) {
     const cached = robloxCache.get(discordId);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
 
-    let identity = { username: null, id: null };
+    let robloxId = null;
+    let username = null;
+
     try {
         const connection = await getMelonlyRobloxConnectionByDiscordId(discordId);
-        const documentedRobloxId =
-            connection?.robloxId ??
-            connection?.data?.robloxId ??
-            connection?.connection?.robloxId ??
-            null;
-
-        identity = extractRobloxIdentity(connection);
-        if (documentedRobloxId && /^\d+$/.test(String(documentedRobloxId))) {
-            identity.id = String(documentedRobloxId);
-        }
+        robloxId = extractVerifiedRobloxId(connection);
+        username = extractExplicitRobloxUsername(connection);
     } catch (error) {
         console.warn(`[ROLE NAMES] Melonly verification lookup failed for ${discordId}: ${error?.message || error}`);
     }
 
-    if (!identity.username) {
+    // Fallback to the member record, but only trust Roblox-specific fields.
+    if (!robloxId && !username) {
         try {
             const member = await getMelonlyMemberByDiscordId(discordId);
-            const memberIdentity = extractRobloxIdentity(member);
-            identity.username ||= memberIdentity.username;
-            identity.id ||= memberIdentity.id;
-        } catch {}
+            robloxId = extractVerifiedRobloxId(member);
+            username = extractExplicitRobloxUsername(member);
+        } catch (error) {
+            console.warn(`[ROLE NAMES] Melonly member lookup failed for ${discordId}: ${error?.message || error}`);
+        }
     }
 
-    if (!identity.username && identity.id) {
-        identity.username = await resolveRobloxUsernameById(identity.id);
+    if (!username && robloxId) {
+        username = await resolveRobloxUsernameById(robloxId);
     }
 
     robloxCache.set(discordId, {
-        value: identity.username || null,
+        value: username || null,
         expiresAt: Date.now() + 15 * 60 * 1000
     });
-    return identity.username || null;
+    return username || null;
 }
 
 async function syncNickname(member, config) {
@@ -1010,7 +1063,8 @@ async function handleInteraction(interaction) {
             triggerRoleIds: uniqueIds(binding.triggerRoleIds),
             linkedRoleIds: uniqueIds(binding.linkedRoleIds),
             triggerPage: 0,
-            linkedPage: 0
+            linkedPage: 0,
+            catalogPage: 0
         });
         await interaction.update({ components: [buildBindingEditor(interaction.guild, getEditState(interaction, 'binding'))] });
         return true;
@@ -1035,6 +1089,18 @@ async function handleInteraction(interaction) {
             return true;
         }
         state.linkedRoleIds = uniqueIds(interaction.values);
+        setEditState(interaction, 'binding', state);
+        await interaction.update({ components: [buildBindingEditor(interaction.guild, state)] });
+        return true;
+    }
+
+    if (id === 'rolebind_catalog_prev' || id === 'rolebind_catalog_next') {
+        const state = getEditState(interaction, 'binding');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Role Bindings again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        state.catalogPage = Math.max(0, (state.catalogPage || 0) + (id.endsWith('_next') ? 1 : -1));
         setEditState(interaction, 'binding', state);
         await interaction.update({ components: [buildBindingEditor(interaction.guild, state)] });
         return true;
@@ -1093,7 +1159,8 @@ async function handleInteraction(interaction) {
             nameMode: 'display_roblox',
             excludedRoleIds: [],
             rolePage: 0,
-            excludePage: 0
+            excludePage: 0,
+            catalogPage: 0
         });
         await interaction.update({ components: [buildNameEditor(interaction.guild, getEditState(interaction, 'name'))] });
         return true;
@@ -1113,7 +1180,8 @@ async function handleInteraction(interaction) {
             nameMode: rule.nameMode || 'display_roblox',
             excludedRoleIds: uniqueIds(rule.excludedRoleIds),
             rolePage: 0,
-            excludePage: 0
+            excludePage: 0,
+            catalogPage: 0
         });
         await interaction.update({ components: [buildNameEditor(interaction.guild, getEditState(interaction, 'name'))] });
         return true;
@@ -1167,6 +1235,18 @@ async function handleInteraction(interaction) {
         return true;
     }
 
+
+    if (id === 'rolename_catalog_prev' || id === 'rolename_catalog_next') {
+        const state = getEditState(interaction, 'name');
+        if (!state) {
+            await interaction.reply({ content: '❌ This editor expired. Open Name Rules again.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        state.catalogPage = Math.max(0, (state.catalogPage || 0) + (id.endsWith('_next') ? 1 : -1));
+        setEditState(interaction, 'name', state);
+        await interaction.update({ components: [buildNameEditor(interaction.guild, state)] });
+        return true;
+    }
 
     if (id === 'rolename_editor_prefix') {
         const state = getEditState(interaction, 'name');
