@@ -135,13 +135,13 @@ const commands = [
             .setMaxLength(500))
         .addUserOption(option => option.setName('rep-1').setDescription('Representative 1'))
         .addUserOption(option => option.setName('rep-2').setDescription('Representative 2'))
-        .addUserOption(option => option.setName('rep-3').setDescription('Representative 3'))
-        .addUserOption(option => option.setName('rep-4').setDescription('Representative 4'))
-        .addUserOption(option => option.setName('rep-5').setDescription('Representative 5'))
-        .addUserOption(option => option.setName('rep-6').setDescription('Representative 6'))
-        .addUserOption(option => option.setName('rep-7').setDescription('Representative 7'))
-        .addUserOption(option => option.setName('rep-8').setDescription('Representative 8'))
-        .addUserOption(option => option.setName('rep-9').setDescription('Representative 9'))
+
+
+
+
+
+
+
         .addUserOption(option => option.setName('rep-10').setDescription('Representative 10')),
 
     new SlashCommandBuilder()
@@ -489,7 +489,7 @@ async function executeCommand(interaction) {
         }
 
         const reps = [];
-        for (let i = 1; i <= 10; i += 1) {
+        for (let i = 1; i <= 2; i += 1) {
             const user = interaction.options.getUser(`rep-${i}`);
             if (user && !reps.includes(user.id)) reps.push(user.id);
         }
@@ -628,12 +628,12 @@ async function showNotifications(interaction, icons) {
 async function showConditions(interaction) {
     const c = loadData().partnershipConditions;
     const lines = [];
-    if (c.members) lines.push(`-Members = ${c.members}+`);
-    if (c.staff) lines.push(`-Staff = ${c.staff}+`);
-    if (c.representatives) lines.push(`-Representatives = ${c.representatives}`);
-    if (c.activeCommunity) lines.push('-Active Community');
-    if (c.other) lines.push(`-Other: ${c.other}`);
-    if (c.notes) lines.push(`-Notes: ${c.notes}`);
+    if (c.members) lines.push(`- Members: ${c.members}+`);
+    if (c.staff) lines.push(`- Staff: ${c.staff}+`);
+    if (c.representatives) lines.push(`- Representatives: ${c.representatives}`);
+    if (c.activeCommunity) lines.push('- Active Community');
+    if (c.other) lines.push(`- ${c.other}`);
+    if (c.notes) lines.push(`- ${c.notes}`);
 
     const container = new ContainerBuilder()
         .addTextDisplayComponents(
@@ -660,7 +660,7 @@ async function showConditions(interaction) {
 async function showRulesMenu(interaction, icons) {
     const container = new ContainerBuilder()
         .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent('Please select the rules you would like to view:')
+            new TextDisplayBuilder().setContent('## MSRP Rules\n\nMelbourne State Roleplay follows a strict rule program. If rules are broken you WILL be infracted. View our game or server rules below.')
         )
         .addSeparatorComponents(new SeparatorBuilder())
         .addActionRowComponents(
@@ -836,7 +836,11 @@ function applicationButton(label, link) {
     if (link) {
         return new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(link);
     }
-    return new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Secondary).setDisabled(true);
+    return new ButtonBuilder()
+        .setCustomId(`main_dash_application_disabled:${label.toLowerCase().replace(/\s+/g, '_')}`)
+        .setLabel(label)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true);
 }
 
 async function showApplications(interaction) {
