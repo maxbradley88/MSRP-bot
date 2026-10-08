@@ -115,6 +115,18 @@ function roleNames(guild, ids, limit = 4) {
     return `${names.slice(0, limit).join(', ')} +${names.length - limit}`;
 }
 
+function roleMentions(guild, ids, limit = 25) {
+    const values = uniqueIds(ids);
+    if (!values.length) return '*None selected*';
+
+    const shown = values.slice(0, limit).map(id =>
+        guild?.roles?.cache?.has(id) ? `<@&${id}>` : `~~Deleted role (${id})~~`
+    );
+
+    if (values.length > limit) shown.push(`+${values.length - limit} more`);
+    return shown.join(' ');
+}
+
 function bindingOptionLabel(guild, binding) {
     const triggers = uniqueIds(binding.triggerRoleIds);
     const linked = uniqueIds(binding.linkedRoleIds);
@@ -166,6 +178,15 @@ function buildDashboardPayload(config, guild, { includeFiles = false } = {}) {
         'sync'
     );
 
+    const bindingsButton = applyIcon(
+        new ButtonBuilder()
+            .setCustomId('rolebind_view_current')
+            .setLabel('Current Bindings')
+            .setStyle(ButtonStyle.Primary),
+        guild,
+        'binding'
+    );
+
     const publishButton = applyIcon(
         new ButtonBuilder()
             .setCustomId('rolebind_publish')
@@ -200,7 +221,7 @@ function buildDashboardPayload(config, guild, { includeFiles = false } = {}) {
         )
         .addSeparatorComponents(new SeparatorBuilder())
         .addActionRowComponents(
-            new ActionRowBuilder().addComponents(syncButton, publishButton)
+            new ActionRowBuilder().addComponents(syncButton, bindingsButton, publishButton)
         )
         .addSeparatorComponents(new SeparatorBuilder())
         .addActionRowComponents(new ActionRowBuilder().addComponents(manageMenu))
@@ -373,14 +394,10 @@ function buildBindingEditor(guild, state) {
     return new ContainerBuilder()
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                `${state.isNew ? '## Create Role Binding' : '## Edit Role Binding'}
-` +
-                `**When a member has:** ${roleNames(guild, state.triggerRoleIds, 10)}
-` +
-                `**Automatically give:** ${roleNames(guild, state.linkedRoleIds, 10)}
-
-` +
-                'Use the searchable Discord role selectors below. They contain the server roles directly — no page numbers or role positions.'
+                `${state.isNew ? '## Create Role Binding' : '## Edit Role Binding'}\n` +
+                `Choose the real Discord roles below. You can search the **entire server role list** in each selector.\n\n` +
+                `### When a member has\n${roleMentions(guild, state.triggerRoleIds)}\n\n` +
+                `### Automatically give\n${roleMentions(guild, state.linkedRoleIds)}`
             )
         )
         .addSeparatorComponents(new SeparatorBuilder())
@@ -496,15 +513,12 @@ function buildNameEditor(guild, state) {
     return new ContainerBuilder()
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                `${state.isNew ? '## Create Name Rule' : '## Edit Name Rule'}
-` +
-                `**Role:** ${state.roleId ? roleName(guild, state.roleId) : 'Not selected'}
-` +
-                `**Prefix:** ${state.prefix || 'None'}
-` +
-                `**Format:** ${state.nameMode === 'discord_username' ? 'Discord username' : 'Discord display name (Roblox username)'}
-` +
-                `**Excluded roles:** ${roleNames(guild, state.excludedRoleIds, 10)}`
+                `${state.isNew ? '## Create Name Rule' : '## Edit Name Rule'}\n` +
+                `Choose the real Discord role, set the prefix, then save.\n\n` +
+                `**Applies to:** ${state.roleId ? `<@&${state.roleId}>` : '*Not selected*'}\n` +
+                `**Prefix:** ${state.prefix || '*None*'}\n` +
+                `**Format:** ${state.nameMode === 'discord_username' ? 'Discord username' : 'Discord display name (Roblox username)'}\n` +
+                `**Excluded roles:** ${roleMentions(guild, state.excludedRoleIds, 12)}`
             )
         )
         .addSeparatorComponents(new SeparatorBuilder())
@@ -537,6 +551,44 @@ function makePrefixModal(state) {
                 .setDescription('Leave blank for no prefix.')
                 .setTextInputComponent(prefix)
         );
+}
+
+function buildCurrentBindingsView(guild, config) {
+    const container = new ContainerBuilder()
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `## Current Role Bindings\nThese are the bindings currently saved in the system.`
+            )
+        )
+        .addSeparatorComponents(new SeparatorBuilder());
+
+    if (!config.bindings.length) {
+        container.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent('*No role bindings are configured.*')
+        );
+        return container;
+    }
+
+    const lines = config.bindings.map((binding, index) => {
+        const triggers = roleMentions(guild, binding.triggerRoleIds, 12);
+        const linked = roleMentions(guild, binding.linkedRoleIds, 12);
+        return `**${index + 1}. When member has**\n${triggers}\n**Give**\n${linked}`;
+    });
+
+    let chunk = '';
+    for (const line of lines) {
+        const candidate = chunk ? `${chunk}\n\n${line}` : line;
+        if (candidate.length > 3200) {
+            container.addTextDisplayComponents(new TextDisplayBuilder().setContent(chunk));
+            container.addSeparatorComponents(new SeparatorBuilder());
+            chunk = line;
+        } else {
+            chunk = candidate;
+        }
+    }
+    if (chunk) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(chunk));
+
+    return container;
 }
 
 function cleanupDeletedRoles(guild, config) {
@@ -880,6 +932,7 @@ async function handleInteraction(interaction) {
     const config = loadConfig();
 
     if (id === 'rolebind_dashboard_manage' && interaction.isStringSelectMenu()) {
+        try { await interaction.guild.roles.fetch(); } catch {}
         const choice = interaction.values[0];
         if (choice === 'bindings') {
             clearEditState(interaction, 'binding');
@@ -893,6 +946,7 @@ async function handleInteraction(interaction) {
 
     // Old dashboard IDs remain supported so the previous dashboard does not break.
     if (id === 'rolebind_add') {
+        try { await interaction.guild.roles.fetch(); } catch {}
         setEditState(interaction, 'binding', { id: `binding-${Date.now()}`, isNew: true, triggerRoleIds: [], linkedRoleIds: [], triggerPage: 0, linkedPage: 0 });
         await interaction.reply(componentsV2Reply(buildBindingEditor(interaction.guild, getEditState(interaction, 'binding'))));
         return true;
@@ -903,6 +957,7 @@ async function handleInteraction(interaction) {
         return true;
     }
     if (id === 'rolename_add') {
+        try { await interaction.guild.roles.fetch(); } catch {}
         setEditState(interaction, 'name', { id: `nick-${Date.now()}`, isNew: true, roleId: null, prefix: '', nameMode: 'display_roblox', excludedRoleIds: [], rolePage: 0, excludePage: 0 });
         await interaction.reply(componentsV2Reply(buildNameEditor(interaction.guild, getEditState(interaction, 'name'))));
         return true;
@@ -922,6 +977,7 @@ async function handleInteraction(interaction) {
     }
 
     if (id === 'rolebind_new') {
+        try { await interaction.guild.roles.fetch(); } catch {}
         setEditState(interaction, 'binding', { id: `binding-${Date.now()}`, isNew: true, triggerRoleIds: [], linkedRoleIds: [], triggerPage: 0, linkedPage: 0 });
         await interaction.update({ components: [buildBindingEditor(interaction.guild, getEditState(interaction, 'binding'))] });
         return true;
@@ -1013,6 +1069,7 @@ async function handleInteraction(interaction) {
     }
 
     if (id === 'rolename_new') {
+        try { await interaction.guild.roles.fetch(); } catch {}
         setEditState(interaction, 'name', {
             id: `nick-${Date.now()}`,
             isNew: true,
@@ -1160,6 +1217,12 @@ async function handleInteraction(interaction) {
     if (id === 'rolename_editor_back') {
         clearEditState(interaction, 'name');
         await interaction.update({ components: [buildNameManager(interaction.guild, loadConfig())] });
+        return true;
+    }
+
+    if (id === 'rolebind_view_current') {
+        try { await interaction.guild.roles.fetch(); } catch {}
+        await interaction.reply(componentsV2Reply(buildCurrentBindingsView(interaction.guild, loadConfig())));
         return true;
     }
 

@@ -48,9 +48,11 @@ async function melonlyRequest(path, options = {}) {
                     ? body.slice(0, 300)
                     : body?.error || body?.message || '';
 
-            throw new Error(
+            const error = new Error(
                 `Melonly API returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`
             );
+            error.status = response.status;
+            throw error;
         }
 
         return body;
@@ -58,9 +60,6 @@ async function melonlyRequest(path, options = {}) {
         clearTimeout(timeout);
     }
 }
-
-
-let memberCache = { expiresAt: 0, members: [] };
 
 function extractMemberArray(body) {
     if (Array.isArray(body)) return body;
@@ -70,20 +69,13 @@ function extractMemberArray(body) {
     return [];
 }
 
-function getDiscordIdFromMelonlyMember(member) {
-    const value =
-        member?.discordId ??
-        member?.discord_id ??
-        member?.discord?.id ??
-        member?.user?.discordId ??
-        member?.user?.discord_id;
-    return value == null ? null : String(value);
-}
+let memberCache = { expiresAt: 0, members: [] };
 
 async function getMelonlyMembers() {
     if (memberCache.expiresAt > Date.now()) return memberCache.members;
 
-    const body = await melonlyRequest('/server/members');
+    // Current official Melonly client uses /server/members.
+    const body = await melonlyRequest('/server/members?limit=100');
     const members = extractMemberArray(body);
     memberCache = {
         expiresAt: Date.now() + 5 * 60 * 1000,
@@ -93,11 +85,25 @@ async function getMelonlyMembers() {
 }
 
 async function getMelonlyMemberByDiscordId(discordId) {
-    return melonlyRequest(`/server/members/discord/${encodeURIComponent(String(discordId))}`);
+    if (!discordId) return null;
+    try {
+        // Current official Melonly client exposes a direct Discord lookup.
+        return await melonlyRequest(`/server/members/discord/${encodeURIComponent(discordId)}`);
+    } catch (error) {
+        if (error?.status === 404) return null;
+        throw error;
+    }
 }
 
 async function getMelonlyRobloxConnectionByDiscordId(discordId) {
-    return melonlyRequest(`/verification/discord/${encodeURIComponent(String(discordId))}/roblox`);
+    if (!discordId) return null;
+    try {
+        // Returns { robloxId, userId, ... } for verified members.
+        return await melonlyRequest(`/verification/discord/${encodeURIComponent(discordId)}/roblox`);
+    } catch (error) {
+        if (error?.status === 404) return null;
+        throw error;
+    }
 }
 
 async function getMelonlyServerInfo() {
@@ -150,19 +156,12 @@ async function getMelonlySnapshot() {
 }
 
 async function startMelonlySession() {
-    // There is currently no documented public Melonly endpoint for starting
-    // a session. Keep this isolated so it can be replaced if Melonly provides
-    // the correct endpoint later.
     throw new Error(
         'Melonly does not currently publish a documented public API endpoint for starting a session.'
     );
 }
 
 async function stopActiveMelonlyShifts() {
-    // Melonly's current public clients document reading shifts, but do not
-    // expose a documented write/clock-out endpoint. Do not guess a destructive
-    // endpoint. This hook is kept here so the correct endpoint can be dropped in
-    // later without changing the shutdown flow.
     console.warn(
         '[MELONLY SHIFTS] Automatic shift ending is not available through the documented public API yet.'
     );
