@@ -89,6 +89,10 @@ const {
 const roleBindingSystem =
     require('./roleBindings/roleBindingSystem');
 
+const {
+    logSlashCommand
+} = require('./utils/commandLogger');
+
 
 const client = new Client({
 
@@ -1545,6 +1549,10 @@ client.on(
 if (
     interaction.isChatInputCommand()
 ) {
+
+        // Central command logging: every slash command is recorded, including
+        // commands that are later denied by role permissions.
+        void logSlashCommand(interaction);
 
         const hasCommandPermission =
         await checkCommandPermission(
