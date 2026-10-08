@@ -34,6 +34,10 @@ const commandPermissions = {
         '1547525713853288448'
     ],
 
+    'send-role-dashboard': [
+        '1547525713853288448'
+    ],
+
     'set-session-times': [
         '1547525713853288448'
     ],
@@ -47,7 +51,7 @@ const commandPermissions = {
     ],
 
     'force-session': [
-        '1547525713853288448'
+        '1548126738876342272'
     ],
 
     'session-shutdown': [
@@ -55,7 +59,7 @@ const commandPermissions = {
     ],
 
     'force-shutdown': [
-        '1547525713853288448'
+        '1548126738876342272'
     ]
 };
 

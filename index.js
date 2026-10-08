@@ -86,6 +86,9 @@ const {
     handleSessionButton
 } = require('./sessions/sessionButtons');
 
+const roleBindingSystem =
+    require('./roleBindings/roleBindingSystem');
+
 
 const client = new Client({
 
@@ -1434,6 +1437,7 @@ client.once(
 body: [
     sendTicketDashboardCommand.toJSON(),
     sessionDashboardCommand.data.toJSON(),
+    roleBindingSystem.command.toJSON(),
     sessionTimesCommand.data.toJSON(),
     sessionVoteCommand.data.toJSON(),
     sessionForceStartCommand.data.toJSON(),
@@ -1478,6 +1482,36 @@ body: [
 
 );
 
+
+
+client.on(
+    'guildMemberUpdate',
+    async (oldMember, newMember) => {
+        await roleBindingSystem.handleGuildMemberUpdate(
+            oldMember,
+            newMember
+        );
+    }
+);
+
+client.on(
+    'guildMemberAdd',
+    async member => {
+        await roleBindingSystem.syncMember(
+            member
+        );
+    }
+);
+
+client.on(
+    'roleDelete',
+    async role => {
+        await roleBindingSystem.handleGuildRoleDelete(
+            role,
+            client
+        );
+    }
+);
 
 
 // ======================================================
@@ -1550,6 +1584,17 @@ if (
         'send-session-dashboard'
     ) {
         await sessionDashboardCommand.execute(
+            interaction
+        );
+
+        return;
+    }
+
+    if (
+        interaction.commandName ===
+        'send-role-dashboard'
+    ) {
+        await roleBindingSystem.executeDashboard(
             interaction
         );
 
@@ -1635,6 +1680,19 @@ client.on(
         );
     }
 );
+
+            // ==================================================
+            // ROLE BINDING / NAMING DASHBOARD
+            // ==================================================
+
+            if (
+                await roleBindingSystem.handleInteraction(
+                    interaction
+                )
+            ) {
+                return;
+            }
+
 
             // ==================================================
             // HAND OFF MODULE

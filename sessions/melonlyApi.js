@@ -59,6 +59,44 @@ async function melonlyRequest(path, options = {}) {
     }
 }
 
+
+let memberCache = { expiresAt: 0, members: [] };
+
+function extractMemberArray(body) {
+    if (Array.isArray(body)) return body;
+    if (Array.isArray(body?.data)) return body.data;
+    if (Array.isArray(body?.members)) return body.members;
+    if (Array.isArray(body?.results)) return body.results;
+    return [];
+}
+
+function getDiscordIdFromMelonlyMember(member) {
+    const value =
+        member?.discordId ??
+        member?.discord_id ??
+        member?.discord?.id ??
+        member?.user?.discordId ??
+        member?.user?.discord_id;
+    return value == null ? null : String(value);
+}
+
+async function getMelonlyMembers() {
+    if (memberCache.expiresAt > Date.now()) return memberCache.members;
+
+    const body = await melonlyRequest('/members');
+    const members = extractMemberArray(body);
+    memberCache = {
+        expiresAt: Date.now() + 5 * 60 * 1000,
+        members
+    };
+    return members;
+}
+
+async function getMelonlyMemberByDiscordId(discordId) {
+    const members = await getMelonlyMembers();
+    return members.find(member => getDiscordIdFromMelonlyMember(member) === String(discordId)) || null;
+}
+
 async function getMelonlyServerInfo() {
     return melonlyRequest('/server/info');
 }
@@ -135,6 +173,8 @@ async function stopActiveMelonlyShifts() {
 module.exports = {
     getMelonlyServerInfo,
     getMelonlySnapshot,
+    getMelonlyMembers,
+    getMelonlyMemberByDiscordId,
     startMelonlySession,
     stopActiveMelonlyShifts
 };

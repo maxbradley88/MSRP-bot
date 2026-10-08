@@ -1,0 +1,37 @@
+{
+  "dashboard": {"channelId": null, "messageId": null},
+  "bindings": [
+    {"id":"member-wl","name":"Member / WL banners","triggerRoleIds":["1548589151471796294","1547542550548709416"],"linkedRoleIds":["1547732610703163544","1547732425428435066"]},
+    {"id":"pings","name":"Pings","triggerRoleIds":["1548805132886745159","1557196999793840220","1548805320967725086","1548805007367999538","1548805480162529280"],"linkedRoleIds":["1557542900752064522"]},
+    {"id":"departments","name":"Departments","triggerRoleIds":["1550046019658711101"],"linkedRoleIds":["1557544323891994665"]},
+    {"id":"media","name":"Media","triggerRoleIds":["1550808851538780160","1550809222520770613"],"linkedRoleIds":["1557540620417900684","1547541940197793832","1550809162487824475"]},
+    {"id":"support","name":"Support","triggerRoleIds":["1556224456152719361","1556204783256346676","1556203938427183105"],"linkedRoleIds":["1556203521345331270","1547541940197793832"]},
+    {"id":"staff-banner","name":"Staff banner","triggerRoleIds":["1547541940197793832"],"linkedRoleIds":["1547541498277535764"]},
+    {"id":"trainee-coms","name":"Trainee & Comms","triggerRoleIds":["1556189822148808735","1547541603772534814"],"linkedRoleIds":["1547541498277535764"]},
+    {"id":"admin","name":"Admin","triggerRoleIds":["1547538687733272677","1547538620724936735","1547538448930578442","1547537399314251797"],"linkedRoleIds":["1547541940197793832","1547538919321510000","1547538747988377681"]},
+    {"id":"staff-trainer","name":"Staff Trainer","triggerRoleIds":["1547543294056333323"],"linkedRoleIds":["1547541940197793832"]},
+    {"id":"mods","name":"Moderation","triggerRoleIds":["1547541336998150234","1547541275673104404","1547541208245604452","1547540643910389811"],"linkedRoleIds":["1547541409244909578","1557550449345953823","1547541940197793832"]},
+    {"id":"supervisor","name":"Supervisor","triggerRoleIds":["1547542820271693876","1547540243094306926","1547540195987947561","1547540129009377280","1547539595539914763","1556179077545853044"],"linkedRoleIds":["1547539082752561274","1547538981766303764","1547541940197793832"]},
+    {"id":"management","name":"Management","triggerRoleIds":["1547536594251157605","1547536377670012948","1547535997762277397","1556178826973941790","1547535922969448458","1547535609168666725"],"linkedRoleIds":["1557539905553436853","1547536815475396668","1547541940197793832"]},
+    {"id":"coms-team","name":"Gives Comms Team","triggerRoleIds":["1556178826973941790","1556179077545853044","1556177802267590686"],"linkedRoleIds":["1556189822148808735"]},
+    {"id":"director","name":"Director","triggerRoleIds":["1547534990546309170","1547534757603184650","1547534077400322089"],"linkedRoleIds":["1551857366239281202","1547535121320779796","1547541940197793832"]},
+    {"id":"executive","name":"Executive","triggerRoleIds":["1547527185936679024","1547526395805171712","1547525794769805382"],"linkedRoleIds":["1551856964055728149","1547527139287371937","1547541940197793832"]},
+    {"id":"foundership","name":"Foundership","triggerRoleIds":["1556177802267590686","1547525252907794453","1547524585564409956","1547522603122425897"],"linkedRoleIds":["1547525713853288448","1551856555467739156","1547541940197793832"]}
+  ],
+  "nicknameRules": [
+    {"id":"nick-f","roleId":"1547525713853288448","prefix":"F","nameMode":"display_roblox","excludedRoleIds":["1556177802267590686"]},
+    {"id":"nick-cd","roleId":"1556177802267590686","prefix":"CD","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-e","roleId":"1547527139287371937","prefix":"E","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-d","roleId":"1547535121320779796","prefix":"D","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-mgt","roleId":"1547536815475396668","prefix":"MGT","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-s","roleId":"1547539082752561274","prefix":"S","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-a","roleId":"1547538747988377681","prefix":"A","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-mod","roleId":"1547541409244909578","prefix":"Mod","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-t","roleId":"1547541603772534814","prefix":"T","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-st","roleId":"1547543294056333323","prefix":"ST","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-ss","roleId":"1556203938427183105","prefix":"SS","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-pr","roleId":"1550809162487824475","prefix":"PR","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-m","roleId":"1547542550548709416","prefix":"M","nameMode":"display_roblox","excludedRoleIds":[]},
+    {"id":"nick-unverified","roleId":"1548589151471796294","prefix":"UNVERIFIED","nameMode":"discord_username","excludedRoleIds":[]}
+  ]
+}
