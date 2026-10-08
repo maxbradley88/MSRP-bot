@@ -161,15 +161,63 @@ async function startMelonlySession() {
     );
 }
 
-async function stopActiveMelonlyShifts() {
-    console.warn(
-        '[MELONLY SHIFTS] Automatic shift ending is not available through the documented public API yet.'
-    );
+function extractShiftArray(body) {
+    if (Array.isArray(body)) return body;
+    if (Array.isArray(body?.data)) return body.data;
+    if (Array.isArray(body?.shifts)) return body.shifts;
+    if (Array.isArray(body?.results)) return body.results;
+    return [];
+}
 
-    return {
-        supported: false,
-        stopped: 0
-    };
+async function getMelonlyShifts() {
+    const body = await melonlyRequest('/server/shifts?limit=100');
+    return extractShiftArray(body);
+}
+
+function isActiveShift(shift) {
+    return !Number(shift?.endedAt || 0);
+}
+
+async function stopActiveMelonlyShifts() {
+    const shifts = await getMelonlyShifts();
+    const active = shifts.filter(isActiveShift);
+
+    if (active.length === 0) {
+        console.log('[MELONLY SHIFTS] No active staff shifts to end.');
+        return { supported: true, stopped: 0, active: 0 };
+    }
+
+    // Melonly's public API currently exposes shift reads, but not a documented
+    // clock-out mutation. Their official client does expose workflow webhooks,
+    // so this supports a Melonly workflow created for ending active shifts.
+    // Put that workflow's webhook URL in MELONLY_SHIFT_END_WEBHOOK.
+    const webhook = process.env.MELONLY_SHIFT_END_WEBHOOK?.trim();
+
+    if (!webhook) {
+        console.warn(
+            `[MELONLY SHIFTS] ${active.length} active shift(s) found, but MELONLY_SHIFT_END_WEBHOOK is not configured.`
+        );
+        return { supported: false, stopped: 0, active: active.length };
+    }
+
+    const response = await fetch(webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            action: 'session_shutdown',
+            endAllActiveShifts: true,
+            shiftIds: active.map(shift => shift.id),
+            memberIds: active.map(shift => shift.memberId).filter(Boolean),
+            timestamp: Date.now()
+        })
+    });
+
+    if (!response.ok) {
+        throw new Error(`Melonly shift workflow returned HTTP ${response.status}`);
+    }
+
+    console.log(`[MELONLY SHIFTS] Sent ${active.length} active shift(s) to the shift-ending workflow.`);
+    return { supported: true, stopped: active.length, active: active.length };
 }
 
 module.exports = {
@@ -178,6 +226,7 @@ module.exports = {
     getMelonlyMembers,
     getMelonlyMemberByDiscordId,
     getMelonlyRobloxConnectionByDiscordId,
+    getMelonlyShifts,
     startMelonlySession,
     stopActiveMelonlyShifts
 };

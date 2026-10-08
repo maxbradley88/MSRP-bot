@@ -626,7 +626,11 @@ function cleanupDeletedRoles(guild, config) {
 }
 
 function getDiscordBaseName(member) {
-    return member.user.globalName || member.user.username;
+    // Discord profile display name first; fall back to username if no display name is set.
+    const displayName = typeof member?.user?.globalName === 'string'
+        ? member.user.globalName.trim()
+        : '';
+    return displayName || member.user.username;
 }
 
 function extractRobloxIdentity(value, depth = 0, seen = new Set()) {
@@ -702,8 +706,19 @@ async function getRobloxUsername(discordId) {
     let identity = { username: null, id: null };
     try {
         const connection = await getMelonlyRobloxConnectionByDiscordId(discordId);
+        const documentedRobloxId =
+            connection?.robloxId ??
+            connection?.data?.robloxId ??
+            connection?.connection?.robloxId ??
+            null;
+
         identity = extractRobloxIdentity(connection);
-    } catch {}
+        if (documentedRobloxId && /^\d+$/.test(String(documentedRobloxId))) {
+            identity.id = String(documentedRobloxId);
+        }
+    } catch (error) {
+        console.warn(`[ROLE NAMES] Melonly verification lookup failed for ${discordId}: ${error?.message || error}`);
+    }
 
     if (!identity.username) {
         try {
