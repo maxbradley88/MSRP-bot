@@ -9,7 +9,7 @@ const {
     TextDisplayBuilder
 } = require('discord.js');
 
-const WELCOME_CHANNEL_ID = '1555146391356047391';
+const WELCOME_CHANNEL_ID = '1547545699288350770';
 const VERIFY_URL = 'https://discord.com/channels/1547522469122805891/1550761589269860352';
 const IMAGE_PATH = path.join(__dirname, '..', 'images', 'image.png');
 

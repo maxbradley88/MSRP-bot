@@ -97,6 +97,8 @@ const {
     sendWelcomeMessage
 } = require('./welcome/welcomeMessage');
 
+const mainDashboard = require('./mainDashboard/dashboardSystem');
+
 
 const client = new Client({
 
@@ -1451,7 +1453,8 @@ body: [
     sessionForceStartCommand.data.toJSON(),
     sessionShutdownCommand.data.toJSON(),
     sessionShutdownCommand.forceData.toJSON(),
-    reactionRole.command.toJSON()
+    reactionRole.command.toJSON(),
+    ...mainDashboard.commands.map(command => command.toJSON())
 ]
 
                 }
@@ -1544,6 +1547,12 @@ client.on(
 
         try {
 
+            if (
+                interaction.isAutocomplete() &&
+                await mainDashboard.handleAutocomplete(interaction)
+            ) {
+                return;
+            }
 
 
             // ==================================================
@@ -1572,6 +1581,10 @@ if (
     }
 
 
+
+    if (await mainDashboard.executeCommand(interaction)) {
+        return;
+    }
 
     if (
     interaction.commandName ===
@@ -1696,6 +1709,19 @@ client.on(
         );
     }
 );
+
+            // ==================================================
+            // MAIN DASHBOARD
+            // ==================================================
+
+            if (
+                await mainDashboard.handleInteraction(
+                    interaction
+                )
+            ) {
+                return;
+            }
+
 
             // ==================================================
             // ROLE BINDING / NAMING DASHBOARD
