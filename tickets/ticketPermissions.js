@@ -3,6 +3,7 @@ const {
 } = require('discord.js');
 
 const config = require('./ticketConfig');
+const ticketState = require('./ticketState');
 
 function getReportsAppealsRoleId() {
     return (
@@ -123,7 +124,8 @@ function buildTicketPermissionOverwrites(
     guild,
     ownerId,
     departmentKey,
-    claimedBy = null
+    claimedBy = null,
+    additionalCustomerIds = []
 ) {
     if (!guild?.roles?.everyone?.id) {
         throw new Error('Guild permission data is unavailable.');
@@ -186,6 +188,27 @@ function buildTicketPermissionOverwrites(
         });
     }
 
+    for (const customerId of additionalCustomerIds || []) {
+        if (
+            !customerId ||
+            customerId === ownerId ||
+            customerId === botId
+        ) {
+            continue;
+        }
+
+        overwrites.push({
+            id: customerId,
+            allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ReadMessageHistory,
+                PermissionFlagsBits.AttachFiles,
+                PermissionFlagsBits.EmbedLinks
+            ]
+        });
+    }
+
     return overwrites;
 }
 
@@ -221,7 +244,8 @@ async function applyTicketPermissions(
         channel.guild,
         ownerId,
         resolvedDepartment,
-        claimedBy
+        claimedBy,
+        ticketState.getAdditionalCustomerIds(channel)
     );
 
     await channel.permissionOverwrites.set(

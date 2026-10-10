@@ -36,6 +36,11 @@ function mutateTicketControls(component, claimed, handedOff = false) {
             : ButtonStyle.Primary;
     }
 
+    if (raw.custom_id === 'ticket_add_user') {
+        raw.style = ButtonStyle.Secondary;
+        raw.disabled = !claimed;
+    }
+
     if (Array.isArray(raw.components)) {
         raw.components = raw.components.map(child =>
             mutateTicketControls(child, claimed, handedOff)

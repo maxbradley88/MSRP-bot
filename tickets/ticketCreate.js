@@ -225,7 +225,13 @@ async function createTicket(
                     .setCustomId('ticket_unclaim')
                     .setLabel('Unclaim')
                     .setStyle(ButtonStyle.Secondary)
-                    .setEmoji(unclaimEmoji || undefined)
+                    .setEmoji(unclaimEmoji || undefined),
+
+                new ButtonBuilder()
+                    .setCustomId('ticket_add_user')
+                    .setLabel('Add User')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setDisabled(true)
             );
 
     const welcomeContainer =

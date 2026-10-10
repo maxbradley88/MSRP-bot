@@ -23,6 +23,42 @@ function setClaimedBy(topic, userId) {
     return `${clean}${clean ? '|' : ''}claimed-by:${userId}`;
 }
 
+
+function parseAdditionalCustomers(topic) {
+    const match = String(topic || '').match(/(?:^|\|)ticket-customers:([^|]*)/);
+
+    if (!match || !match[1]) return [];
+
+    return [...new Set(
+        match[1]
+            .split(',')
+            .map(value => value.trim())
+            .filter(value => /^\d+$/.test(value))
+    )];
+}
+
+function removeAdditionalCustomers(topic) {
+    return String(topic || '')
+        .replace(/(?:^|\|)ticket-customers:[^|]*/g, '')
+        .replace(/^\|+|\|+$/g, '')
+        .replace(/\|{2,}/g, '|');
+}
+
+function setAdditionalCustomers(topic, userIds) {
+    const clean = removeAdditionalCustomers(topic);
+    const ids = [...new Set(
+        (userIds || [])
+            .map(String)
+            .filter(value => /^\d+$/.test(value))
+    )];
+
+    if (ids.length === 0) {
+        return clean;
+    }
+
+    return `${clean}${clean ? '|' : ''}ticket-customers:${ids.join(',')}`;
+}
+
 function getDesiredState(channel) {
     const existing = desiredStates.get(channel.id);
 
@@ -227,6 +263,42 @@ function handoffTicketState(channel, _newName, options = {}) {
     );
 }
 
+
+function getAdditionalCustomerIds(channel) {
+    if (!channel) return [];
+    return parseAdditionalCustomers(getEffectiveTopic(channel));
+}
+
+function isAdditionalCustomer(channel, userId) {
+    if (!userId) return false;
+    return getAdditionalCustomerIds(channel).includes(String(userId));
+}
+
+function addAdditionalCustomer(channel, userId, options = {}) {
+    const current = getDesiredState(channel);
+    const customerIds = parseAdditionalCustomers(
+        current.topic || channel.topic
+    );
+
+    if (!customerIds.includes(String(userId))) {
+        customerIds.push(String(userId));
+    }
+
+    return updateDesiredState(
+        channel,
+        {
+            topic: setAdditionalCustomers(
+                current.topic || channel.topic,
+                customerIds
+            )
+        },
+        {
+            reason: options.reason || `Added ticket customer ${userId}`,
+            delay: options.delay ?? 0
+        }
+    );
+}
+
 function forgetTicket(channelId) {
     const timer = syncTimers.get(channelId);
     if (timer) clearTimeout(timer);
@@ -243,5 +315,8 @@ module.exports = {
     claimTicket,
     unclaimTicket,
     handoffTicketState,
+    getAdditionalCustomerIds,
+    isAdditionalCustomer,
+    addAdditionalCustomer,
     forgetTicket
 };
