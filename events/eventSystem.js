@@ -67,9 +67,8 @@ const commands = [
             .setDescription('Second event option.')
             .setRequired(true)
             .setMaxLength(80))
-        .addStringOption(option => option.setName('option-3').setDescription('Third event option.').setMaxLength(80))
-        .addStringOption(option => option.setName('option-4').setDescription('Fourth event option.').setMaxLength(80))
-        .addStringOption(option => option.setName('option-5').setDescription('Fifth event option.').setMaxLength(80))
+        // Discord requires every required slash-command option to appear
+        // before any optional option. Keep vote end date/time here.
         .addStringOption(option => option
             .setName('end-date')
             .setDescription('Vote end date: DD/MM/YYYY or YYYY-MM-DD.')
@@ -80,6 +79,9 @@ const commands = [
             .setDescription('Vote end time in 24-hour format, e.g. 19:30.')
             .setRequired(true)
             .setMaxLength(5))
+        .addStringOption(option => option.setName('option-3').setDescription('Third event option.').setMaxLength(80))
+        .addStringOption(option => option.setName('option-4').setDescription('Fourth event option.').setMaxLength(80))
+        .addStringOption(option => option.setName('option-5').setDescription('Fifth event option.').setMaxLength(80))
 ];
 
 function applyEmoji(component, emoji) {
