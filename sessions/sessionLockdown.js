@@ -1,6 +1,6 @@
 const { getState } = require('./sessionState');
 const { getErlcPlayers, runErlcCommand } = require('./erlcApi');
-const { stopActiveMelonlyShifts, isMelonlyShiftEndConfigured } = require('./melonlyApi');
+const { stopActiveMelonlyShifts } = require('./melonlyApi');
 const sessionConfig = require('./sessionConfig');
 
 // Keep lockdown runtime state process-wide. This prevents duplicate module loads,
@@ -14,9 +14,7 @@ const runtime = globalThis[RUNTIME_KEY] || (globalThis[RUNTIME_KEY] = {
     shiftGuardBlockedUntil: 0,
     lastMelonlyRateLimitLogAt: 0,
     warnedPlayers: new Map(),
-    recentlyHandled: new Map(),
-    versionLogged: false,
-    missingWebhookLogged: false
+    recentlyHandled: new Map()
 });
 
 const SHIFT_GUARD_INTERVAL_MS = 60_000;
@@ -88,14 +86,6 @@ function logMelonlyRateLimitOnce(retryAfterMs) {
 async function enforceMelonlyShiftLockdown() {
     const state = getState();
     if (!state.shutdownLockdownEnabled) return;
-
-    if (!isMelonlyShiftEndConfigured()) {
-        if (!runtime.missingWebhookLogged) {
-            runtime.missingWebhookLogged = true;
-            console.warn('[SESSION LOCKDOWN] Melonly shift SSD guard disabled: MELONLY_SHIFT_END_WEBHOOK is not configured.');
-        }
-        return;
-    }
 
     const now = Date.now();
     if (now < runtime.shiftGuardBlockedUntil) return;
@@ -217,11 +207,6 @@ async function runShutdownLockdownSweep() {
 }
 
 function startSessionLockdownWatcher() {
-    if (!runtime.versionLogged) {
-        runtime.versionLogged = true;
-        console.log('[SESSION LOCKDOWN] Guard v3 loaded (singleton + Melonly request dedupe).');
-    }
-
     if (runtime.intervalHandle) return runtime.intervalHandle;
 
     const intervalMs = sessionConfig.shutdownLockdownRefreshMs || 15_000;

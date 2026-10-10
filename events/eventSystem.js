@@ -173,6 +173,7 @@ function clampText(text, max) {
 
 function statusFor(current) {
     if (current.phase === 'cancelled') return { label: 'Canceled', style: ButtonStyle.Danger, color: 0xED4245 };
+    if (current.phase === 'waiting-session') return { label: 'Waiting for Session', style: ButtonStyle.Primary, color: 0x5865F2 };
     if (current.phase === 'active' && sessionIsActive()) return { label: 'Active', style: ButtonStyle.Success, color: 0x57F287 };
     if (current.phase === 'active' && !sessionIsActive()) return { label: 'Waiting for Session', style: ButtonStyle.Primary, color: 0x5865F2 };
     if (['scheduled', 'starting-soon'].includes(current.phase) && !sessionIsActive()) {
@@ -446,6 +447,21 @@ function buildStartingSoonCard(current, icons) {
     return { container, files: buildFiles({ bottom: true }) };
 }
 
+function buildWaitingSessionCard(current, icons) {
+    const container = new ContainerBuilder()
+        .setAccentColor(0x5865F2)
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `## Waiting for session\n\nBefore we can start this event a session must be hosted, please wait for a session to be hosted.\n\nOnce a session has started this event will be started by the host.`
+            )
+        )
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addActionRowComponents(eventControlRow(current, icons))
+        .addSeparatorComponents(new SeparatorBuilder());
+    addBottomImage(container);
+    return { container, files: buildFiles({ bottom: true }) };
+}
+
 function buildActiveCard(current, icons) {
     const event = current.event;
     const voiceId = event.liveVoiceChannelId || EVENT_STAGE_CHANNEL_ID;
@@ -503,6 +519,7 @@ function buildCard(current, icons) {
     if (current.phase === 'draft') return buildDraftCard(current, icons);
     if (current.phase === 'scheduled') return buildScheduledCard(current, icons);
     if (current.phase === 'starting-soon') return buildStartingSoonCard(current, icons);
+    if (current.phase === 'waiting-session') return buildWaitingSessionCard(current, icons);
     if (current.phase === 'active') return buildActiveCard(current, icons);
     if (current.phase === 'cancelled') return buildCancelledCard(current, icons);
     return buildCompletedCard(current, icons);
@@ -511,7 +528,7 @@ function buildCard(current, icons) {
 function allowedMentionsForPhase(current) {
     const roles = [];
     let parse = [];
-    if (['voting', 'draft', 'scheduled', 'starting-soon', 'active', 'cancelled'].includes(current.phase)) {
+    if (['voting', 'draft', 'scheduled', 'starting-soon', 'waiting-session', 'active', 'cancelled'].includes(current.phase)) {
         roles.push(EVENT_NOTIFICATION_ROLE_ID);
     }
     if (['draft', 'tie'].includes(current.phase)) roles.push(EVENT_TEAM_ROLE_ID);
@@ -652,8 +669,17 @@ async function finishVote(client, current, forcedWinnerId = null) {
 }
 
 function staffPanel(current, icons, userId) {
+    const hostBlockedBySession =
+        ['starting-soon', 'waiting-session'].includes(current.phase) &&
+        userId === current.event?.hostId &&
+        !sessionIsActive();
+
+    const staffText = hostBlockedBySession
+        ? '## Event Staff Actions\n\n🔒 **Start Event is unavailable because MSRP is not currently SSU.** Once a session is active, reopen Staff Actions and you will be able to start the event.'
+        : '## Event Staff Actions';
+
     const container = new ContainerBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent('## Event Staff Actions'))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(staffText))
         .addSeparatorComponents(new SeparatorBuilder());
 
     const buttons = [];
@@ -674,15 +700,15 @@ function staffPanel(current, icons, userId) {
             applyEmoji(new ButtonBuilder().setCustomId(`evt_configure:${current.id}`).setLabel('Configure Event').setStyle(ButtonStyle.Primary), icons.configure),
             applyEmoji(new ButtonBuilder().setCustomId(`evt_cancel:${current.id}`).setLabel('Cancel Event').setStyle(ButtonStyle.Danger), icons.cancel)
         );
-    } else if (['scheduled', 'starting-soon'].includes(current.phase)) {
-        if (current.phase === 'starting-soon') {
+    } else if (['scheduled', 'starting-soon', 'waiting-session'].includes(current.phase)) {
+        if (['starting-soon', 'waiting-session'].includes(current.phase)) {
             buttons.push(
                 applyEmoji(
                     new ButtonBuilder()
                         .setCustomId(`evt_start:${current.id}`)
                         .setLabel('Start Event')
                         .setStyle(ButtonStyle.Success)
-                        .setDisabled(userId !== current.event.hostId),
+                        .setDisabled(userId !== current.event.hostId || !sessionIsActive()),
                     icons.start
                 )
             );
@@ -1282,7 +1308,10 @@ async function handleInteraction(interaction, client) {
             return true;
         }
         if (!sessionIsActive()) {
-            await interaction.reply({ content: '❌ The MSRP session is currently offline. The event cannot start until a session is running.', flags: MessageFlags.Ephemeral });
+            await interaction.reply({
+                content: '❌ **Start Event is locked because MSRP is not currently SSU.** A normal session must be active before this event can be started.',
+                flags: MessageFlags.Ephemeral
+            });
             return true;
         }
         const menu = new ChannelSelectMenuBuilder()
@@ -1305,7 +1334,12 @@ async function handleInteraction(interaction, client) {
             await startEvent(client, current, interaction.guild, interaction.values[0]);
             await interaction.editReply({ content: '✅ Event started.', components: [] });
         } catch (error) {
-            await interaction.editReply({ content: error.message === 'SESSION_OFFLINE' ? '❌ The MSRP session is offline.' : `❌ Could not start event: ${error.message}`, components: [] });
+            await interaction.editReply({
+                content: error.message === 'SESSION_OFFLINE'
+                    ? '❌ **Start Event is locked because MSRP is not currently SSU.** A normal session must be active before this event can be started.'
+                    : `❌ Could not start event: ${error.message}`,
+                components: []
+            });
         }
         return true;
     }
@@ -1362,10 +1396,34 @@ async function monitorTick(client) {
         if (current.phase === 'starting-soon') {
             const previous = current.lastSessionActive;
             const next = sessionIsActive();
+
+            // Once the scheduled time has arrived, an event may not start
+            // until the normal MSRP session is actually SSU. Show a dedicated
+            // waiting card rather than leaving an expired Starting Soon card.
+            if (current.event?.startAt && now >= current.event.startAt && !next) {
+                current.phase = 'waiting-session';
+                current.lastSessionActive = false;
+                saveData({ current });
+                await replaceCurrentCard(client, current, { ping: false });
+                return;
+            }
+
             if (previous !== next) {
                 current.lastSessionActive = next;
                 saveData({ current });
                 await editCurrentCard(client, current);
+            }
+            return;
+        }
+
+        if (current.phase === 'waiting-session') {
+            // The moment a normal session becomes SSU, return to the
+            // start-ready card. Only the configured host can start it.
+            if (sessionIsActive()) {
+                current.phase = 'starting-soon';
+                current.lastSessionActive = true;
+                saveData({ current });
+                await replaceCurrentCard(client, current, { ping: false });
             }
             return;
         }
