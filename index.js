@@ -50,6 +50,7 @@ const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
 const ticketState = require('./tickets/ticketState');
 const ticketStatus = require('./tickets/ticketStatus');
 const ticketPermissions = require('./tickets/ticketPermissions');
+const ticketAddUser = require('./tickets/ticketAddUser');
 const { sendTicketCloseNotifications } = require('./tickets/ticketCloseMessage');
 const {
     checkCommandPermission
@@ -98,6 +99,7 @@ const {
 } = require('./welcome/welcomeMessage');
 
 const mainDashboard = require('./mainDashboard/dashboardSystem');
+const eventSystem = require('./events/eventSystem');
 
 
 const client = new Client({
@@ -419,6 +421,16 @@ function getTicketActionPermission(member, channel, action, userId) {
     const isSenior = isSeniorSupportMember(member);
     const claimedBy = getClaimedUserId(channel);
     const department = getTicketDepartment(channel);
+
+    // A member added through "Add User" is always a customer in this ticket,
+    // even if they also hold a staff role elsewhere in the server.
+    if (ticketState.isAdditionalCustomer(channel, userId)) {
+        return {
+            allowed: false,
+            claimedBy,
+            message: '❌ You were added to this ticket as a customer and cannot use staff ticket actions.'
+        };
+    }
 
     if (action === 'claim') {
         // SSS can claim/take over tickets in any department.
@@ -1455,7 +1467,8 @@ body: [
     sessionShutdownCommand.data.toJSON(),
     sessionShutdownCommand.forceData.toJSON(),
     reactionRole.command.toJSON(),
-    ...mainDashboard.commands.map(command => command.toJSON())
+    ...mainDashboard.commands.map(command => command.toJSON()),
+    ...eventSystem.commands.map(command => command.toJSON())
 ]
 
                 }
@@ -1473,6 +1486,7 @@ body: [
             startDashboardAutoRefresh(client);
             startSessionLockdownWatcher();
             sessionShutdownCommand.resumeShutdownAnnouncementExpiry(client);
+            eventSystem.startEventMonitor(client);
 
 
 
@@ -1550,6 +1564,13 @@ client.on(
 
             if (
                 interaction.isAutocomplete() &&
+                await eventSystem.handleAutocomplete(interaction)
+            ) {
+                return;
+            }
+
+            if (
+                interaction.isAutocomplete() &&
                 await mainDashboard.handleAutocomplete(interaction)
             ) {
                 return;
@@ -1582,6 +1603,10 @@ if (
     }
 
 
+
+    if (await eventSystem.executeCommand(interaction, client)) {
+        return;
+    }
 
     if (await mainDashboard.executeCommand(interaction)) {
         return;
@@ -1712,6 +1737,20 @@ client.on(
 );
 
             // ==================================================
+            // EVENT SYSTEM
+            // ==================================================
+
+            if (
+                await eventSystem.handleInteraction(
+                    interaction,
+                    client
+                )
+            ) {
+                return;
+            }
+
+
+            // ==================================================
             // MAIN DASHBOARD
             // ==================================================
 
@@ -1730,6 +1769,19 @@ client.on(
 
             if (
                 await roleBindingSystem.handleInteraction(
+                    interaction
+                )
+            ) {
+                return;
+            }
+
+
+            // ==================================================
+            // ADD CUSTOMER TO TICKET
+            // ==================================================
+
+            if (
+                await ticketAddUser.handleInteraction(
                     interaction
                 )
             ) {
