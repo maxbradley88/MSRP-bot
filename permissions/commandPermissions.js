@@ -2,6 +2,7 @@ const { MessageFlags } = require('discord.js');
 
 const FOUNDERSHIP_ROLE_ID = '1547525713853288448';
 const SESSION_CONTROL_ROLE_ID = '1548126738876342272';
+const EVENT_TEAM_ROLE_ID = '1558396994601615460';
 
 const commandPermissions = {
     'send-ticket-dashboard': [FOUNDERSHIP_ROLE_ID],
@@ -29,14 +30,8 @@ const commandPermissions = {
     'coc-team-add': [FOUNDERSHIP_ROLE_ID],
     'coc-team-remove': [FOUNDERSHIP_ROLE_ID],
 
-    // Event system — Foundership and Session Control can manage events/votes.
-    'event-create': [FOUNDERSHIP_ROLE_ID, SESSION_CONTROL_ROLE_ID],
-    'event-schedule': [FOUNDERSHIP_ROLE_ID, SESSION_CONTROL_ROLE_ID],
-    'event-start': [FOUNDERSHIP_ROLE_ID, SESSION_CONTROL_ROLE_ID],
-    'event-end': [FOUNDERSHIP_ROLE_ID, SESSION_CONTROL_ROLE_ID],
-    'event-cancel': [FOUNDERSHIP_ROLE_ID, SESSION_CONTROL_ROLE_ID],
-    'event-vote': [FOUNDERSHIP_ROLE_ID, SESSION_CONTROL_ROLE_ID],
-    'event-vote-end': [FOUNDERSHIP_ROLE_ID, SESSION_CONTROL_ROLE_ID]
+    // Event system — only the Event Team can create/manage events.
+    'event-vote': [EVENT_TEAM_ROLE_ID]
 };
 
 const settings = {

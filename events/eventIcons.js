@@ -2,11 +2,21 @@ const sharp = require('sharp');
 const lucide = require('lucide-static');
 
 const ICONS = {
-    event: { name: 'msrp_event', lucide: 'PartyPopper' },
     vote: { name: 'msrp_vote', lucide: 'Vote' },
-    calendar: { name: 'msrp_event_calendar', lucide: 'CalendarDays' },
+    staff: { name: 'msrp_event_staff', lucide: 'Settings2' },
     join: { name: 'msrp_event_join', lucide: 'LogIn' },
-    finish: { name: 'msrp_event_finish', lucide: 'CircleCheck' }
+    participants: { name: 'msrp_event_people', lucide: 'Users' },
+    status: { name: 'msrp_event_status', lucide: 'Activity' },
+    add: { name: 'msrp_event_add', lucide: 'CirclePlus' },
+    remove: { name: 'msrp_event_remove', lucide: 'CircleMinus' },
+    end: { name: 'msrp_event_end', lucide: 'CircleStop' },
+    cancel: { name: 'msrp_event_cancel', lucide: 'CircleX' },
+    configure: { name: 'msrp_event_configure', lucide: 'SlidersHorizontal' },
+    calendar: { name: 'msrp_event_calendar', lucide: 'CalendarDays' },
+    host: { name: 'msrp_event_host', lucide: 'UserRoundCog' },
+    partnership: { name: 'msrp_event_partner', lucide: 'Handshake' },
+    start: { name: 'msrp_event_start', lucide: 'Play' },
+    winner: { name: 'msrp_event_winner', lucide: 'Trophy' }
 };
 
 function whiteSvg(exportName) {
@@ -26,21 +36,24 @@ async function ensureEventIcons(guild) {
         let emoji = guild.emojis.cache.find(existing => existing.name === spec.name);
 
         if (!emoji) {
-            const png = await sharp(Buffer.from(whiteSvg(spec.lucide)))
-                .resize(128, 128)
-                .png()
-                .toBuffer();
+            try {
+                const png = await sharp(Buffer.from(whiteSvg(spec.lucide)))
+                    .resize(128, 128)
+                    .png()
+                    .toBuffer();
 
-            emoji = await guild.emojis.create({
-                attachment: png,
-                name: spec.name,
-                reason: 'MSRP event system icon'
-            });
-
-            console.log(`[EVENTS] Created icon ${spec.name}`);
+                emoji = await guild.emojis.create({
+                    attachment: png,
+                    name: spec.name,
+                    reason: 'MSRP event system icon'
+                });
+                console.log(`[EVENTS] Created icon ${spec.name}`);
+            } catch (error) {
+                console.warn(`[EVENTS] Could not create icon ${spec.name}:`, error?.message || error);
+            }
         }
 
-        result[key] = { id: emoji.id, name: emoji.name };
+        if (emoji) result[key] = { id: emoji.id, name: emoji.name };
     }
 
     return result;

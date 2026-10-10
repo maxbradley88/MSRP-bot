@@ -1,34 +1,47 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const runtimePath = path.join(__dirname, 'events.runtime.json');
 
 const DEFAULT_DATA = {
-    events: [],
-    votes: []
+    current: null
 };
+
+function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+}
 
 function loadData() {
     try {
         const parsed = JSON.parse(fs.readFileSync(runtimePath, 'utf8'));
         return {
-            events: Array.isArray(parsed.events) ? parsed.events : [],
-            votes: Array.isArray(parsed.votes) ? parsed.votes : []
+            ...clone(DEFAULT_DATA),
+            ...parsed,
+            current: parsed?.current || null
         };
     } catch {
-        return JSON.parse(JSON.stringify(DEFAULT_DATA));
+        return clone(DEFAULT_DATA);
     }
 }
 
 function saveData(data) {
-    fs.writeFileSync(runtimePath, JSON.stringify(data, null, 2));
+    const clean = {
+        ...clone(DEFAULT_DATA),
+        ...data,
+        current: data?.current || null
+    };
+
+    fs.writeFileSync(runtimePath, JSON.stringify(clean, null, 2));
+    return clean;
 }
 
-function makeId(prefix) {
-    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+function makeId(prefix = 'event') {
+    return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 module.exports = {
+    runtimePath,
     loadData,
     saveData,
     makeId
