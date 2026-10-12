@@ -39,34 +39,71 @@ const ICONS = {
     }
 };
 
+const ROLE_ICON_RUNTIME_KEY = Symbol.for('msrp.roleBindingIcons.runtime');
+const roleIconRuntime = globalThis[ROLE_ICON_RUNTIME_KEY] || (globalThis[ROLE_ICON_RUNTIME_KEY] = {
+    byGuild: new Map(),
+    promises: new Map(),
+    lastRestFetchAt: new Map()
+});
+
 async function ensureRoleBindingIcons(guild) {
     if (!guild) return {};
 
-    let emojis = guild.emojis.cache;
-    try {
-        emojis = await guild.emojis.fetch();
-    } catch {}
+    const cached = roleIconRuntime.byGuild.get(guild.id);
+    if (cached) return cached;
 
-    const result = {};
-    for (const [key, icon] of Object.entries(ICONS)) {
-        let emoji = emojis.find(existing => existing.name === icon.name) || guild.emojis.cache.find(existing => existing.name === icon.name);
-        if (!emoji) {
+    if (roleIconRuntime.promises.has(guild.id)) {
+        return roleIconRuntime.promises.get(guild.id);
+    }
+
+    const promise = (async () => {
+        let emojis = guild.emojis.cache;
+        const missingAny = Object.values(ICONS).some(
+            icon => !emojis.find(existing => existing.name === icon.name)
+        );
+
+        const lastFetch = roleIconRuntime.lastRestFetchAt.get(guild.id) || 0;
+        if (missingAny && Date.now() - lastFetch > 30 * 60 * 1000) {
+            roleIconRuntime.lastRestFetchAt.set(guild.id, Date.now());
             try {
-                const image = await sharp(Buffer.from(icon.svg)).resize(128, 128).png().toBuffer();
-                emoji = await guild.emojis.create({
-                    attachment: image,
-                    name: icon.name,
-                    reason: 'MSRP role management dashboard icon'
-                });
+                emojis = await guild.emojis.fetch();
             } catch (error) {
-                console.warn(`[ROLE ICON] Could not create ${icon.name}: ${error.message}`);
-                emoji = null;
+                console.warn('[ROLE ICONS] Emoji REST refresh failed; using cache:', error?.message || error);
             }
         }
-        result[key] = emoji;
-    }
-    return result;
+
+        const result = {};
+        for (const [key, icon] of Object.entries(ICONS)) {
+            let emoji =
+                emojis.find(existing => existing.name === icon.name) ||
+                guild.emojis.cache.find(existing => existing.name === icon.name);
+
+            if (!emoji) {
+                try {
+                    const image = await sharp(Buffer.from(icon.svg)).resize(128, 128).png().toBuffer();
+                    emoji = await guild.emojis.create({
+                        attachment: image,
+                        name: icon.name,
+                        reason: 'MSRP role management dashboard icon'
+                    });
+                } catch (error) {
+                    console.warn(`[ROLE ICON] Could not create ${icon.name}: ${error.message}`);
+                    emoji = null;
+                }
+            }
+            result[key] = emoji;
+        }
+
+        roleIconRuntime.byGuild.set(guild.id, result);
+        return result;
+    })().finally(() => {
+        roleIconRuntime.promises.delete(guild.id);
+    });
+
+    roleIconRuntime.promises.set(guild.id, promise);
+    return promise;
 }
+
 
 function iconFor(guild, key) {
     const name = ICONS[key]?.name;

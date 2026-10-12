@@ -1,6 +1,8 @@
+const fs = require('fs');
+const path = require('path');
 const { getState } = require('./sessionState');
 const { getErlcPlayers, runErlcCommand } = require('./erlcApi');
-const { stopActiveMelonlyShifts } = require('./melonlyApi');
+const { stopActiveMelonlyShifts, isMelonlyShiftEndConfigured } = require('./melonlyApi');
 const sessionConfig = require('./sessionConfig');
 
 // Keep lockdown runtime state process-wide. This prevents duplicate module loads,
@@ -14,13 +16,59 @@ const runtime = globalThis[RUNTIME_KEY] || (globalThis[RUNTIME_KEY] = {
     shiftGuardBlockedUntil: 0,
     lastMelonlyRateLimitLogAt: 0,
     warnedPlayers: new Map(),
-    recentlyHandled: new Map()
+    recentlyHandled: new Map(),
+    versionLogged: false,
+    missingWebhookLogged: false
 });
 
-const SHIFT_GUARD_INTERVAL_MS = 60_000;
+const SHIFT_GUARD_INTERVAL_MS = 5 * 60_000;
+const MELONLY_RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
+const SHIFT_LOCK_PATH = path.join('/tmp', 'msrp-melonly-shift-guard.lock');
+const SHIFT_COOLDOWN_PATH = path.join('/tmp', 'msrp-melonly-shift-guard.cooldown');
+const SWEEP_LOCK_PATH = path.join('/tmp', 'msrp-session-lockdown-sweep.lock');
 const KICK_GRACE_MS = 10_000;
 const LOCKDOWN_PM =
     'This server is currently shutdown. Join the mainland server to be notified when the next session is being hosted!';
+
+function readTimestampFile(filePath) {
+    try {
+        const value = Number(fs.readFileSync(filePath, 'utf8'));
+        return Number.isFinite(value) ? value : 0;
+    } catch {
+        return 0;
+    }
+}
+
+function writeTimestampFile(filePath, value) {
+    try {
+        fs.writeFileSync(filePath, String(value));
+    } catch {}
+}
+
+function acquireProcessFileLock(filePath, staleMs) {
+    try {
+        const fd = fs.openSync(filePath, 'wx');
+        fs.writeFileSync(fd, String(Date.now()));
+        fs.closeSync(fd);
+        return true;
+    } catch {
+        const createdAt = readTimestampFile(filePath);
+        if (createdAt && Date.now() - createdAt > staleMs) {
+            try { fs.unlinkSync(filePath); } catch {}
+            try {
+                const fd = fs.openSync(filePath, 'wx');
+                fs.writeFileSync(fd, String(Date.now()));
+                fs.closeSync(fd);
+                return true;
+            } catch {}
+        }
+        return false;
+    }
+}
+
+function releaseProcessFileLock(filePath) {
+    try { fs.unlinkSync(filePath); } catch {}
+}
 
 function isProtectedPermission(permission) {
     const value = String(permission || '').trim().toLowerCase();
@@ -87,12 +135,26 @@ async function enforceMelonlyShiftLockdown() {
     const state = getState();
     if (!state.shutdownLockdownEnabled) return;
 
+    if (!isMelonlyShiftEndConfigured()) {
+        if (!runtime.missingWebhookLogged) {
+            runtime.missingWebhookLogged = true;
+            console.warn('[SESSION LOCKDOWN] Melonly shift SSD guard disabled: MELONLY_SHIFT_END_WEBHOOK is not configured.');
+        }
+        return;
+    }
+
     const now = Date.now();
+    const crossProcessCooldownUntil = readTimestampFile(SHIFT_COOLDOWN_PATH);
+    if (now < crossProcessCooldownUntil) return;
     if (now < runtime.shiftGuardBlockedUntil) return;
     if (now - runtime.lastShiftGuardAt < SHIFT_GUARD_INTERVAL_MS) return;
 
     // If one check is already running anywhere in this process, share it.
     if (runtime.shiftGuardPromise) return runtime.shiftGuardPromise;
+
+    // Also prevent duplicate Wispbyte/Node processes from all checking Melonly
+    // at the same time. The lock automatically becomes stale after 2 minutes.
+    if (!acquireProcessFileLock(SHIFT_LOCK_PATH, 2 * 60_000)) return;
 
     runtime.lastShiftGuardAt = now;
     runtime.shiftGuardPromise = (async () => {
@@ -103,11 +165,12 @@ async function enforceMelonlyShiftLockdown() {
             }
         } catch (error) {
             if (error?.status === 429) {
-                const retryAfterMs = Math.max(Number(error.retryAfterMs) || 60_000, 60_000);
+                const retryAfterMs = Math.max(Number(error.retryAfterMs) || MELONLY_RATE_LIMIT_BACKOFF_MS, MELONLY_RATE_LIMIT_BACKOFF_MS);
                 runtime.shiftGuardBlockedUntil = Math.max(
                     runtime.shiftGuardBlockedUntil,
                     Date.now() + retryAfterMs
                 );
+                writeTimestampFile(SHIFT_COOLDOWN_PATH, runtime.shiftGuardBlockedUntil);
                 logMelonlyRateLimitOnce(retryAfterMs);
                 return;
             }
@@ -118,6 +181,7 @@ async function enforceMelonlyShiftLockdown() {
             );
         } finally {
             runtime.shiftGuardPromise = null;
+            releaseProcessFileLock(SHIFT_LOCK_PATH);
         }
     })();
 
@@ -195,18 +259,28 @@ async function runShutdownLockdownSweep() {
     // Share a single in-flight sweep across every caller/module instance.
     if (runtime.sweepPromise) return runtime.sweepPromise;
 
+    // If a duplicate Node process somehow exists, only one process performs
+    // the ER:LC/Melonly lockdown sweep. The lock is stale after 30 seconds.
+    if (!acquireProcessFileLock(SWEEP_LOCK_PATH, 30_000)) return false;
+
     runtime.sweepPromise = doShutdownLockdownSweep()
         .catch(error => {
             console.warn('[SESSION LOCKDOWN] Sweep skipped:', error?.message || error);
         })
         .finally(() => {
             runtime.sweepPromise = null;
+            releaseProcessFileLock(SWEEP_LOCK_PATH);
         });
 
     return runtime.sweepPromise;
 }
 
 function startSessionLockdownWatcher() {
+    if (!runtime.versionLogged) {
+        runtime.versionLogged = true;
+        console.log('[SESSION LOCKDOWN] Guard v4 loaded (cross-process singleton + API cooldowns).');
+    }
+
     if (runtime.intervalHandle) return runtime.intervalHandle;
 
     const intervalMs = sessionConfig.shutdownLockdownRefreshMs || 15_000;

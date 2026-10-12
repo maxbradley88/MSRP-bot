@@ -3,9 +3,17 @@ const BASE_URL = 'https://api.melonly.xyz/api/v1';
 const MELONLY_RUNTIME_KEY = Symbol.for('msrp.melonlyApi.runtime');
 const melonlyRuntime = globalThis[MELONLY_RUNTIME_KEY] || (globalThis[MELONLY_RUNTIME_KEY] = {
     blockedUntil: 0,
-    memberCache: { expiresAt: 0, members: [] }
+    memberCache: { expiresAt: 0, members: [] },
+    responseCache: new Map(),
+    inFlightRequests: new Map(),
+    lastRateLimitLogAt: 0,
+    shiftStopPromise: null,
+    lastShiftStopCheckAt: 0,
+    shiftStopBlockedUntil: 0,
+    shiftWebhookMissingLogged: false
 });
-const DEFAULT_RATE_LIMIT_BACKOFF_MS = 60_000;
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
+const SERVER_ERROR_BACKOFF_MS = 2 * 60_000;
 
 function getRetryAfterMs(response, body) {
     const header = response.headers.get('retry-after');
@@ -48,7 +56,35 @@ function getToken() {
     return token.trim();
 }
 
+function getCachedResponse(key) {
+    const entry = melonlyRuntime.responseCache.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+        melonlyRuntime.responseCache.delete(key);
+        return undefined;
+    }
+    return entry.value;
+}
+
+function setCachedResponse(key, value, ttlMs) {
+    if (!ttlMs) return;
+    melonlyRuntime.responseCache.set(key, {
+        value,
+        expiresAt: Date.now() + ttlMs
+    });
+}
+
+function logRateLimitOnce(retryAfterMs) {
+    if (Date.now() - melonlyRuntime.lastRateLimitLogAt < 5 * 60_000) return;
+    melonlyRuntime.lastRateLimitLogAt = Date.now();
+    console.warn(`[MELONLY API] Rate limited. Cooling down for ${Math.ceil(retryAfterMs / 60000)} minute(s).`);
+}
+
 async function melonlyRequest(path, options = {}) {
+    const cacheTtlMs = Number(options.cacheTtlMs) || 0;
+    const fetchOptions = { ...options };
+    delete fetchOptions.cacheTtlMs;
+
     if (Date.now() < melonlyRuntime.blockedUntil) {
         const error = new Error('Melonly API is temporarily cooling down after a rate limit.');
         error.status = 429;
@@ -57,63 +93,96 @@ async function melonlyRequest(path, options = {}) {
         throw error;
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const method = String(fetchOptions.method || 'GET').toUpperCase();
+    const requestKey = method === 'GET' ? `${method}:${path}` : null;
+
+    if (requestKey && cacheTtlMs) {
+        const cached = getCachedResponse(requestKey);
+        if (cached !== undefined) return cached;
+    }
+
+    // Collapse identical concurrent GET requests into one network request.
+    if (requestKey && melonlyRuntime.inFlightRequests.has(requestKey)) {
+        return melonlyRuntime.inFlightRequests.get(requestKey);
+    }
+
+    const requestPromise = (async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10_000);
+
+        try {
+            const response = await fetch(`${BASE_URL}${path}`, {
+                ...fetchOptions,
+                signal: controller.signal,
+                headers: {
+                    Authorization: `Bearer ${getToken()}`,
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    ...(fetchOptions.headers || {})
+                }
+            });
+
+            const text = await response.text();
+            let body = null;
+
+            if (text) {
+                try {
+                    body = JSON.parse(text);
+                } catch {
+                    body = text;
+                }
+            }
+
+            if (!response.ok) {
+                let detail = '';
+                if (typeof body === 'string') {
+                    detail = body.slice(0, 300);
+                } else if (typeof body?.message === 'string') {
+                    detail = body.message;
+                } else if (typeof body?.error === 'string') {
+                    detail = body.error;
+                } else if (body?.error?.message) {
+                    detail = String(body.error.message);
+                }
+
+                const error = new Error(
+                    `Melonly API returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`
+                );
+                error.status = response.status;
+
+                if (response.status === 429) {
+                    error.retryAfterMs = Math.max(getRetryAfterMs(response, body), 5 * 60_000);
+                    melonlyRuntime.blockedUntil = Math.max(
+                        melonlyRuntime.blockedUntil,
+                        Date.now() + error.retryAfterMs
+                    );
+                    logRateLimitOnce(error.retryAfterMs);
+                } else if (response.status >= 500) {
+                    // Server-side failures are not retried in a tight loop.
+                    melonlyRuntime.blockedUntil = Math.max(
+                        melonlyRuntime.blockedUntil,
+                        Date.now() + SERVER_ERROR_BACKOFF_MS
+                    );
+                }
+
+                throw error;
+            }
+
+            if (requestKey && cacheTtlMs) setCachedResponse(requestKey, body, cacheTtlMs);
+            return body;
+        } finally {
+            clearTimeout(timeout);
+        }
+    })();
+
+    if (requestKey) melonlyRuntime.inFlightRequests.set(requestKey, requestPromise);
 
     try {
-        const response = await fetch(`${BASE_URL}${path}`, {
-            ...options,
-            signal: controller.signal,
-            headers: {
-                Authorization: `Bearer ${getToken()}`,
-                Accept: 'application/json',
-                'Content-Type': 'application/json',
-                ...(options.headers || {})
-            }
-        });
-
-        const text = await response.text();
-        let body = null;
-
-        if (text) {
-            try {
-                body = JSON.parse(text);
-            } catch {
-                body = text;
-            }
-        }
-
-        if (!response.ok) {
-            let detail = '';
-            if (typeof body === 'string') {
-                detail = body.slice(0, 300);
-            } else if (typeof body?.message === 'string') {
-                detail = body.message;
-            } else if (typeof body?.error === 'string') {
-                detail = body.error;
-            } else if (body?.error?.message) {
-                detail = String(body.error.message);
-            }
-
-            const error = new Error(
-                `Melonly API returned HTTP ${response.status}${detail ? `: ${detail}` : ''}`
-            );
-            error.status = response.status;
-
-            if (response.status === 429) {
-                error.retryAfterMs = getRetryAfterMs(response, body);
-                melonlyRuntime.blockedUntil = Math.max(
-                    melonlyRuntime.blockedUntil,
-                    Date.now() + error.retryAfterMs
-                );
-            }
-
-            throw error;
-        }
-
-        return body;
+        return await requestPromise;
     } finally {
-        clearTimeout(timeout);
+        if (requestKey && melonlyRuntime.inFlightRequests.get(requestKey) === requestPromise) {
+            melonlyRuntime.inFlightRequests.delete(requestKey);
+        }
     }
 }
 
@@ -132,7 +201,7 @@ async function getMelonlyMembers() {
     const body = await melonlyRequest('/server/members?limit=100');
     const members = extractMemberArray(body);
     melonlyRuntime.memberCache = {
-        expiresAt: Date.now() + 5 * 60 * 1000,
+        expiresAt: Date.now() + 10 * 60 * 1000,
         members
     };
     return members;
@@ -142,7 +211,7 @@ async function getMelonlyMemberByDiscordId(discordId) {
     if (!discordId) return null;
     try {
         // Current official Melonly client exposes a direct Discord lookup.
-        return await melonlyRequest(`/server/members/discord/${encodeURIComponent(discordId)}`);
+        return await melonlyRequest(`/server/members/discord/${encodeURIComponent(discordId)}`, { cacheTtlMs: 10 * 60_000 });
     } catch (error) {
         if (error?.status === 404) return null;
         throw error;
@@ -153,7 +222,7 @@ async function getMelonlyRobloxConnectionByDiscordId(discordId) {
     if (!discordId) return null;
     try {
         // Returns { robloxId, userId, ... } for verified members.
-        return await melonlyRequest(`/verification/discord/${encodeURIComponent(discordId)}/roblox`);
+        return await melonlyRequest(`/verification/discord/${encodeURIComponent(discordId)}/roblox`, { cacheTtlMs: 10 * 60_000 });
     } catch (error) {
         if (error?.status === 404) return null;
         throw error;
@@ -161,7 +230,7 @@ async function getMelonlyRobloxConnectionByDiscordId(discordId) {
 }
 
 async function getMelonlyServerInfo() {
-    return melonlyRequest('/server/info');
+    return melonlyRequest('/server/info', { cacheTtlMs: 2 * 60_000 });
 }
 
 function asCount(value) {
@@ -224,7 +293,7 @@ function extractShiftArray(body) {
 }
 
 async function getMelonlyShifts() {
-    const body = await melonlyRequest('/server/shifts?limit=100');
+    const body = await melonlyRequest('/server/shifts?limit=100', { cacheTtlMs: 2 * 60_000 });
     return extractShiftArray(body);
 }
 
@@ -232,46 +301,88 @@ function isActiveShift(shift) {
     return !Number(shift?.endedAt || 0);
 }
 
+function isMelonlyShiftEndConfigured() {
+    return Boolean(process.env.MELONLY_SHIFT_END_WEBHOOK?.trim());
+}
+
 async function stopActiveMelonlyShifts() {
-    const shifts = await getMelonlyShifts();
-    const active = shifts.filter(isActiveShift);
-
-    if (active.length === 0) {
-        console.log('[MELONLY SHIFTS] No active staff shifts to end.');
-        return { supported: true, stopped: 0, active: 0 };
-    }
-
-    // Melonly's public API currently exposes shift reads, but not a documented
-    // clock-out mutation. Their official client does expose workflow webhooks,
-    // so this supports a Melonly workflow created for ending active shifts.
-    // Put that workflow's webhook URL in MELONLY_SHIFT_END_WEBHOOK.
     const webhook = process.env.MELONLY_SHIFT_END_WEBHOOK?.trim();
 
+    // Do not burn Melonly API quota reading shifts when there is no supported
+    // way configured to end them afterwards.
     if (!webhook) {
-        console.warn(
-            `[MELONLY SHIFTS] ${active.length} active shift(s) found, but MELONLY_SHIFT_END_WEBHOOK is not configured.`
-        );
-        return { supported: false, stopped: 0, active: active.length };
+        if (!melonlyRuntime.shiftWebhookMissingLogged) {
+            melonlyRuntime.shiftWebhookMissingLogged = true;
+            console.warn(
+                '[MELONLY SHIFTS] Shift enforcement is disabled because MELONLY_SHIFT_END_WEBHOOK is not configured.'
+            );
+        }
+        return { supported: false, stopped: 0, active: 0, skipped: 'no-webhook' };
     }
 
-    const response = await fetch(webhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            action: 'session_shutdown',
-            endAllActiveShifts: true,
-            shiftIds: active.map(shift => shift.id),
-            memberIds: active.map(shift => shift.memberId).filter(Boolean),
-            timestamp: Date.now()
-        })
-    });
-
-    if (!response.ok) {
-        throw new Error(`Melonly shift workflow returned HTTP ${response.status}`);
+    const now = Date.now();
+    if (now < melonlyRuntime.shiftStopBlockedUntil) {
+        return {
+            supported: true,
+            stopped: 0,
+            active: 0,
+            skipped: 'cooldown',
+            retryAfterMs: melonlyRuntime.shiftStopBlockedUntil - now
+        };
     }
 
-    console.log(`[MELONLY SHIFTS] Sent ${active.length} active shift(s) to the shift-ending workflow.`);
-    return { supported: true, stopped: active.length, active: active.length };
+    // One process-wide shift enforcement operation at a time, regardless of
+    // how many callers/watcher instances invoke this function.
+    if (melonlyRuntime.shiftStopPromise) return melonlyRuntime.shiftStopPromise;
+
+    // Never check active shifts more than once every five minutes.
+    if (now - melonlyRuntime.lastShiftStopCheckAt < 5 * 60_000) {
+        return { supported: true, stopped: 0, active: 0, skipped: 'interval' };
+    }
+
+    melonlyRuntime.lastShiftStopCheckAt = now;
+    melonlyRuntime.shiftStopPromise = (async () => {
+        try {
+            const shifts = await getMelonlyShifts();
+            const active = shifts.filter(isActiveShift);
+
+            if (active.length === 0) {
+                return { supported: true, stopped: 0, active: 0 };
+            }
+
+            const response = await fetch(webhook, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'session_shutdown',
+                    endAllActiveShifts: true,
+                    shiftIds: active.map(shift => shift.id),
+                    memberIds: active.map(shift => shift.memberId).filter(Boolean),
+                    timestamp: Date.now()
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`Melonly shift workflow returned HTTP ${response.status}`);
+            }
+
+            console.log(`[MELONLY SHIFTS] Sent ${active.length} active shift(s) to the shift-ending workflow.`);
+            return { supported: true, stopped: active.length, active: active.length };
+        } catch (error) {
+            if (error?.status === 429) {
+                const retryAfterMs = Math.max(Number(error.retryAfterMs) || DEFAULT_RATE_LIMIT_BACKOFF_MS, DEFAULT_RATE_LIMIT_BACKOFF_MS);
+                melonlyRuntime.shiftStopBlockedUntil = Math.max(
+                    melonlyRuntime.shiftStopBlockedUntil,
+                    Date.now() + retryAfterMs
+                );
+            }
+            throw error;
+        } finally {
+            melonlyRuntime.shiftStopPromise = null;
+        }
+    })();
+
+    return melonlyRuntime.shiftStopPromise;
 }
 
 module.exports = {
@@ -282,5 +393,6 @@ module.exports = {
     getMelonlyRobloxConnectionByDiscordId,
     getMelonlyShifts,
     startMelonlySession,
-    stopActiveMelonlyShifts
+    stopActiveMelonlyShifts,
+    isMelonlyShiftEndConfigured
 };

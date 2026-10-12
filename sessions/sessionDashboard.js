@@ -26,14 +26,20 @@ const {
 } = require('./sessionIcons');
 
 const {
-    getMelonlySnapshot
-} = require('./melonlyApi');
-
-const {
     getErlcHealth
 } = require('./erlcApi');
 
 const sessionConfig = require('./sessionConfig');
+
+// Process-wide dashboard runtime so duplicate imports/reconnects cannot start
+// multiple refresh loops or duplicate the same Discord REST work.
+const DASHBOARD_RUNTIME_KEY = Symbol.for('msrp.sessionDashboard.runtime');
+const dashboardRuntime = globalThis[DASHBOARD_RUNTIME_KEY] || (globalThis[DASHBOARD_RUNTIME_KEY] = {
+    updater: null,
+    refreshPromise: null,
+    channel: null,
+    message: null
+});
 
 function divider() {
     return new SeparatorBuilder()
@@ -73,17 +79,12 @@ function displayLiveCount(value, { sessionActive, apiOnline }) {
 
 function getCachedDashboardData() {
     const state = getState();
-    const melonly = state.lastMelonlySnapshot || {
-        ok: false,
-        info: {},
-        playerCount: null,
-        queueCount: null,
-        staffCount: null
-    };
     const erlc = state.lastErlcHealth || { ok: false };
 
     return {
-        melonly,
+        // Kept for backward compatibility with sessionState snapshots.
+        // The public dashboard no longer polls Melonly at all.
+        melonly: state.lastMelonlySnapshot || { ok: false, info: {} },
         erlc,
         bothOnline: Boolean(erlc.ok),
         updatedAt: state.lastUpdatedAt || Date.now()
@@ -91,32 +92,24 @@ function getCachedDashboardData() {
 }
 
 async function getDashboardData() {
-    const [melonlyResult, erlcResult] = await Promise.allSettled([
-        getMelonlySnapshot(),
-        getErlcHealth()
-    ]);
-
-    const melonly = melonlyResult.status === 'fulfilled'
-        ? melonlyResult.value
-        : {
+    // ER:LC is the sole live source for online/player/queue status.
+    // Removing the old Melonly poll halves dashboard API traffic and prevents
+    // dashboard refreshes from contributing to Melonly 429s.
+    let erlc;
+    try {
+        erlc = await getErlcHealth();
+    } catch (error) {
+        erlc = {
             ok: false,
-            error: melonlyResult.reason?.message || 'Melonly request failed.'
+            error: error?.message || 'ER:LC request failed.'
         };
+    }
 
-    const erlc = erlcResult.status === 'fulfilled'
-        ? erlcResult.value
-        : {
-            ok: false,
-            error: erlcResult.reason?.message || 'ER:LC request failed.'
-        };
-
+    const state = getState();
+    const melonly = state.lastMelonlySnapshot || { ok: false, info: {} };
     const updatedAt = Date.now();
 
-    setApiSnapshot({
-        melonly,
-        erlc,
-        updatedAt
-    });
+    setApiSnapshot({ melonly, erlc, updatedAt });
 
     return {
         melonly,
@@ -126,7 +119,7 @@ async function getDashboardData() {
     };
 }
 
-async function buildSessionDashboard({ guild, liveData = null, forceInactive = false, forceOffline = false } = {}) {
+async function buildSessionDashboard({ guild, liveData = null, forceInactive = false } = {}) {
     const state = getState();
     const icons = await ensureSessionIcons(guild);
     const data = liveData || await getDashboardData();
@@ -137,7 +130,7 @@ async function buildSessionDashboard({ guild, liveData = null, forceInactive = f
     const updatedTimestamp = Math.floor(updatedAt / 1000);
     const isVoting = state.status === 'vote';
     const isSessionActive = !forceInactive && (state.status === 'active' || state.status === 'shutting-down');
-    const isOnline = !forceOffline && Boolean(data.erlc?.ok);
+    const isOnline = data.bothOnline;
 
     // Live players and queue now come ONLY from ER:LC. Melonly is not
     // used for these counters. Staff is the number of Discord members
@@ -146,18 +139,16 @@ async function buildSessionDashboard({ guild, liveData = null, forceInactive = f
     const liveQueueCount = firstFinite(data.erlc?.queueCount);
 
     let liveStaffCount = null;
-    if (guild && !forceOffline) {
-        try {
-            await guild.members.fetch();
-        } catch (error) {
-            console.warn('[SESSION STAFF COUNT] Could not refresh guild members:', error?.message || error);
-        }
-
+    if (guild) {
+        // IMPORTANT: never call guild.members.fetch() from a repeating dashboard
+        // refresh. That uses Gateway member requests and was one of the noisy
+        // calls seen in the Wispbyte logs. The GuildMembers intent keeps this
+        // role membership cache current as members/roles change.
         const staffRole = guild.roles.cache.get(sessionConfig.staffRoleId);
         liveStaffCount = staffRole ? staffRole.members.size : 0;
     }
 
-    const erlcCountsOnline = !forceOffline && Boolean(data.erlc?.ok);
+    const erlcCountsOnline = Boolean(data.erlc?.ok);
 
     const playerCount = displayLiveCount(livePlayerCount, {
         sessionActive: isSessionActive,
@@ -169,7 +160,7 @@ async function buildSessionDashboard({ guild, liveData = null, forceInactive = f
     });
     const staffCount = displayLiveCount(liveStaffCount, {
         sessionActive: isSessionActive,
-        apiOnline: !forceOffline
+        apiOnline: true
     });
 
     const maxPlayers = firstFinite(
@@ -265,8 +256,6 @@ async function buildSessionDashboard({ guild, liveData = null, forceInactive = f
         );
 
     const serverName =
-        melonlyInfo.name ||
-        melonlyInfo.serverName ||
         sessionConfig.serverName ||
         'Unavailable';
 
@@ -358,65 +347,86 @@ async function sendSessionDashboard(channel) {
 }
 
 async function refreshSessionDashboard(client, options = {}) {
-    const state = getState();
+    if (dashboardRuntime.refreshPromise) return dashboardRuntime.refreshPromise;
 
-    if (!state.dashboardChannelId || !state.dashboardMessageId) {
-        return false;
-    }
+    dashboardRuntime.refreshPromise = (async () => {
+        const state = getState();
 
-    const channel = await client.channels.fetch(state.dashboardChannelId).catch(() => null);
-    if (!channel?.isTextBased()) return false;
+        if (!state.dashboardChannelId || !state.dashboardMessageId) {
+            return false;
+        }
 
-    const message = await channel.messages.fetch(state.dashboardMessageId).catch(() => null);
-    if (!message) return false;
+        let channel = dashboardRuntime.channel;
+        if (!channel || channel.id !== state.dashboardChannelId) {
+            channel =
+                client.channels.cache.get(state.dashboardChannelId) ||
+                await client.channels.fetch(state.dashboardChannelId).catch(() => null);
+            dashboardRuntime.channel = channel || null;
+            dashboardRuntime.message = null;
+        }
 
-    let liveData = null;
+        if (!channel?.isTextBased()) return false;
 
-    if (options.preferCached) {
-        liveData = getCachedDashboardData();
-    }
+        let message = dashboardRuntime.message;
+        if (!message || message.id !== state.dashboardMessageId) {
+            message =
+                channel.messages.cache.get(state.dashboardMessageId) ||
+                await channel.messages.fetch(state.dashboardMessageId).catch(() => null);
+            dashboardRuntime.message = message || null;
+        }
 
-    const dashboard = await buildSessionDashboard({
-        guild: channel.guild,
-        liveData,
-        forceInactive: Boolean(options.forceInactive),
-        forceOffline: Boolean(options.forceOffline)
+        if (!message) return false;
+
+        let liveData = null;
+        if (options.preferCached) {
+            liveData = getCachedDashboardData();
+        }
+
+        const dashboard = await buildSessionDashboard({
+            guild: channel.guild,
+            liveData,
+            forceInactive: Boolean(options.forceInactive)
+        });
+
+        await message.edit({
+            ...dashboard,
+            flags: MessageFlags.IsComponentsV2
+        });
+
+        return true;
+    })().finally(() => {
+        dashboardRuntime.refreshPromise = null;
     });
 
-    await message.edit({
-        ...dashboard,
-        flags: MessageFlags.IsComponentsV2
-    });
-
-    return true;
+    return dashboardRuntime.refreshPromise;
 }
 
 function startSessionDashboardUpdater(client) {
-    const refreshMs =
+    if (dashboardRuntime.updater) return dashboardRuntime.updater;
+
+    // Never hammer Discord/API dashboards faster than once per minute.
+    // Manual session actions can still call refreshSessionDashboard instantly.
+    const configured =
         sessionConfig.dashboardRefreshMs ||
         sessionConfig.refreshIntervalMs ||
-        30_000;
+        60_000;
+    const refreshMs = Math.max(60_000, Number(configured) || 60_000);
 
-    // Run once shortly after startup so the dashboard has fresh data.
-    setTimeout(() => {
+    const startupTimer = setTimeout(() => {
         refreshSessionDashboard(client).catch(error => {
             console.error('[SESSION DASHBOARD INITIAL REFRESH ERROR]', error);
         });
-    }, 1500).unref?.();
+    }, 5_000);
+    startupTimer.unref?.();
 
-    const interval = setInterval(async () => {
-        try {
-            await refreshSessionDashboard(client);
-        } catch (error) {
+    dashboardRuntime.updater = setInterval(() => {
+        refreshSessionDashboard(client).catch(error => {
             console.error('[SESSION DASHBOARD REFRESH ERROR]', error);
-        }
+        });
     }, refreshMs);
 
-    if (typeof interval.unref === 'function') {
-        interval.unref();
-    }
-
-    return interval;
+    dashboardRuntime.updater.unref?.();
+    return dashboardRuntime.updater;
 }
 
 async function handleDisplayButton(interaction) {

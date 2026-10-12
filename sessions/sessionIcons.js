@@ -142,6 +142,13 @@ async function createEmoji(guild, icon) {
 }
 
 
+const ICON_RUNTIME_KEY = Symbol.for('msrp.sessionIcons.runtime');
+const iconRuntime = globalThis[ICON_RUNTIME_KEY] || (globalThis[ICON_RUNTIME_KEY] = {
+    byGuild: new Map(),
+    ensurePromises: new Map(),
+    lastRestFetchAt: new Map()
+});
+
 async function ensureSessionIcons(guild) {
     if (!guild) {
         return {
@@ -157,82 +164,73 @@ async function ensureSessionIcons(guild) {
         };
     }
 
-    /*
-     * Fetch the actual server emojis so we
-     * aren't relying only on Discord's cache.
-     */
-    const emojis =
-        await guild.emojis.fetch();
+    const cached = iconRuntime.byGuild.get(guild.id);
+    if (cached) return cached;
 
-    const result = {};
+    if (iconRuntime.ensurePromises.has(guild.id)) {
+        return iconRuntime.ensurePromises.get(guild.id);
+    }
 
+    const promise = (async () => {
+        // Start with discord.js' gateway/cache data. Do NOT call emojis.fetch()
+        // on every dashboard refresh.
+        let emojis = guild.emojis.cache;
 
-    /*
-     * Find the existing :logo: emoji.
-     *
-     * We DO NOT create this one because you
-     * already have it in the server.
-     */
-    result.logo =
-        emojis.find(
-            emoji =>
-                emoji.name?.toLowerCase() ===
-                'logo'
-        ) || null;
+        const expectedNames = new Set([
+            'logo',
+            ...Object.values(ICONS).map(icon => icon.name)
+        ]);
+        const missingAny = [...expectedNames].some(
+            name => !emojis.find(e => e.name?.toLowerCase() === name.toLowerCase())
+        );
 
-
-    /*
-     * Create/reuse our white session icons.
-     */
-    for (
-        const [key, icon]
-        of Object.entries(ICONS)
-    ) {
-        let emoji =
-            emojis.find(
-                existing =>
-                    existing.name ===
-                    icon.name
-            );
-
-        if (!emoji) {
+        // At most one REST emoji refresh per guild every 30 minutes, and only
+        // if something is actually missing from cache.
+        const lastFetch = iconRuntime.lastRestFetchAt.get(guild.id) || 0;
+        if (missingAny && Date.now() - lastFetch > 30 * 60 * 1000) {
+            iconRuntime.lastRestFetchAt.set(guild.id, Date.now());
             try {
-                console.log(
-                    `[SESSION ICON] Creating :${icon.name}:`
-                );
-
-                emoji =
-                    await createEmoji(
-                        guild,
-                        icon
-                    );
-
-                console.log(
-                    `[SESSION ICON] Created :${icon.name}:`
-                );
-
+                emojis = await guild.emojis.fetch();
             } catch (error) {
-                console.error(
-                    `[SESSION ICON ERROR] ${icon.name}`,
-                    error
-                );
-
-                emoji = null;
+                console.warn('[SESSION ICONS] Emoji REST refresh failed; using cache:', error?.message || error);
             }
         }
 
-        result[key] = emoji;
-    }
+        const result = {};
+        result.logo =
+            emojis.find(emoji => emoji.name?.toLowerCase() === 'logo') ||
+            guild.emojis.cache.find(emoji => emoji.name?.toLowerCase() === 'logo') ||
+            null;
 
+        for (const [key, icon] of Object.entries(ICONS)) {
+            let emoji =
+                emojis.find(existing => existing.name === icon.name) ||
+                guild.emojis.cache.find(existing => existing.name === icon.name);
 
-    if (!result.logo) {
-        console.warn(
-            '[SESSION DASHBOARD] Could not find a server emoji named :logo:'
-        );
-    }
+            if (!emoji) {
+                try {
+                    console.log(`[SESSION ICON] Creating :${icon.name}:`);
+                    emoji = await createEmoji(guild, icon);
+                } catch (error) {
+                    console.error(`[SESSION ICON ERROR] ${icon.name}`, error);
+                    emoji = null;
+                }
+            }
+            result[key] = emoji;
+        }
 
+        if (!result.logo) {
+            console.warn('[SESSION DASHBOARD] Could not find a server emoji named :logo:');
+        }
 
-    return result;
+        iconRuntime.byGuild.set(guild.id, result);
+        return result;
+    })().finally(() => {
+        iconRuntime.ensurePromises.delete(guild.id);
+    });
+
+    iconRuntime.ensurePromises.set(guild.id, promise);
+    return promise;
 }
 
 
