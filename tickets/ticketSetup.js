@@ -63,6 +63,20 @@ async function execute(interaction) {
             interaction.guild
         );
 
+        // Share the existing custom application emoji with the ticket dashboard.
+        // Avoid unnecessary Discord API calls or creating a duplicate emoji.
+        const applicationsEmoji = interaction.guild.emojis.cache.find(
+            emoji => emoji.name === 'msrp_applications'
+        );
+        if (applicationsEmoji) {
+            iconMap.applications = {
+                id: applicationsEmoji.id,
+                name: applicationsEmoji.name
+            };
+        } else {
+            console.warn('[TICKET DASHBOARD] msrp_applications emoji not in guild cache; displaying button without emoji.');
+        }
+
         console.log('✅ Ticket icons ready!');
 
 

@@ -104,6 +104,11 @@ console.log('INFORMATION ICON:', iconMap.information);
         .setLabel('Applications')
         .setStyle(ButtonStyle.Secondary);
 
+    // Reuse the custom emoji created by the main information dashboard.
+    if (iconMap?.applications) {
+        applicationsButton.setEmoji(iconMap.applications);
+    }
+
 
     // DASHBOARD CONTAINER
     // ==========================================
@@ -140,9 +145,9 @@ console.log('INFORMATION ICON:', iconMap.information);
             new ActionRowBuilder()
                 .addComponents(
                     rulesButton,
+                    applicationsButton,
                     informationButton,
-                    communitySupportButton,
-                    applicationsButton
+                    communitySupportButton
                 )
         )
 
