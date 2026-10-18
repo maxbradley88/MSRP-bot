@@ -49,26 +49,39 @@ function zonedParts(date) {
   return Object.fromEntries(parts.filter(x => x.type !== 'literal').map(x => [x.type, Number(x.value)]));
 }
 function parseDate(dateStr, timeStr) {
-  const d = String(dateStr || '').trim();
-  const t = String(timeStr || '').trim();
+  // Accept common human-entered formats, including single-digit days/hours and AM/PM.
+  const d = String(dateStr ?? '').trim();
+  const t = String(timeStr ?? '').trim().toLowerCase().replace(/\s+/g, '');
   let y, mo, day;
-  let m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(d);
-  if (m) { day=+m[1]; mo=+m[2]; y=+m[3]; }
-  else { m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d); if (!m) return null; y=+m[1]; mo=+m[2]; day=+m[3]; }
-  const tm = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(t);
-  if (!tm || y < 2025 || y > 2100 || mo < 1 || mo > 12 || day < 1 || day > 31) return null;
-  const hh=+tm[1], mm=+tm[2];
-  const nominal=Date.UTC(y,mo-1,day,hh,mm);
-  if (new Date(Date.UTC(y,mo-1,day)).getUTCDate() !== day) return null;
-  // Resolve IANA timezone including DST; reject nonexistent DST local times.
-  let guess=nominal-10.5*3600_000;
-  for (let i=0;i<4;i++) {
-    const p=zonedParts(new Date(guess));
-    const seen=Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute);
-    guess += nominal-seen;
+  let match = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2}|\d{4})$/.exec(d);
+  if (match) {
+    day = Number(match[1]); mo = Number(match[2]); y = Number(match[3]);
+    if (match[3].length === 2) y += 2000;
+  } else {
+    match = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(d);
+    if (!match) return null;
+    y = Number(match[1]); mo = Number(match[2]); day = Number(match[3]);
   }
-  const p=zonedParts(new Date(guess));
-  if ([p.year,p.month,p.day,p.hour,p.minute].join()!==[y,mo,day,hh,mm].join()) return null;
+  const timeMatch = /^(\d{1,2})[:.](\d{2})(am|pm)?$/.exec(t);
+  if (!timeMatch) return null;
+  let hh = Number(timeMatch[1]);
+  const mm = Number(timeMatch[2]);
+  if (timeMatch[3]) {
+    if (hh < 1 || hh > 12) return null;
+    hh = (hh % 12) + (timeMatch[3] === 'pm' ? 12 : 0);
+  }
+  if (y < 1970 || y > 2100 || mo < 1 || mo > 12 || day < 1 || day > 31 || hh > 23 || mm > 59) return null;
+  const nominal = Date.UTC(y, mo - 1, day, hh, mm);
+  if (new Date(Date.UTC(y, mo - 1, day)).getUTCDate() !== day) return null;
+  // Resolve Australia/Melbourne DST, including historical dates.
+  let guess = nominal - 10.5 * 3600_000;
+  for (let i = 0; i < 5; i++) {
+    const parts = zonedParts(new Date(guess));
+    const seen = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute);
+    guess += nominal - seen;
+  }
+  const parts = zonedParts(new Date(guess));
+  if ([parts.year, parts.month, parts.day, parts.hour, parts.minute].join() !== [y, mo, day, hh, mm].join()) return null;
   return guess;
 }
 function timezoneLabel(instant) {
@@ -138,7 +151,7 @@ async function commandHandler(interaction) {
   const o=interaction.options;
   const drawAt=parseDate(o.getString('draw-date'),o.getString('draw-time'));
   if (!drawAt) {
-    await interaction.reply({content:`Enter a valid date/time (${timezoneLabel(drawAt || Date.now())}). Dates use DD/MM/YYYY, times use HH:MM (24-hour). Current time in that timezone: ${new Intl.DateTimeFormat('en-AU',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
+    await interaction.reply({content:`Invalid draw date/time: **${safeText(o.getString('draw-date'))} ${safeText(o.getString('draw-time'))}**. Use DD/MM/YYYY and HH:MM (24-hour); formats like 18/10/2026 9:00pm also work. Past dates are allowed. Timezone: ${timezoneLabel(Date.now())}. Current time: ${new Intl.DateTimeFormat('en-AU',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
   }
   await interaction.deferReply({flags:MessageFlags.Ephemeral});
   // Backdated giveaways must never be open for entry, even briefly.
