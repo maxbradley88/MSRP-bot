@@ -13,6 +13,7 @@ const {
 } = require('discord.js');
 
 const config = require('./ticketConfig');
+const path = require('node:path');
 
 function createTicketDashboard(iconMap) {
 
@@ -146,8 +147,7 @@ console.log('INFORMATION ICON:', iconMap.information);
                 .addComponents(
                     rulesButton,
                     applicationsButton,
-                    informationButton,
-                    communitySupportButton
+                    informationButton
                 )
         )
 
@@ -162,9 +162,20 @@ console.log('INFORMATION ICON:', iconMap.information);
                 .addComponents(ticketDropdown)
         )
 
+        // COMMUNITY SUPPORT: separate row because Discord select menus
+        // must occupy their own action row.
+        .addActionRowComponents(
+            new ActionRowBuilder().addComponents(communitySupportButton)
+        )
+
         // DIVIDER
-        .addSeparatorComponents(
-            new SeparatorBuilder()
+        .addSeparatorComponents(new SeparatorBuilder())
+
+        // FOOTER IMAGE
+        .addMediaGalleryComponents(
+            new MediaGalleryBuilder().addItems(
+                new MediaGalleryItemBuilder().setURL('attachment://image.png')
+            )
         );
 
 
@@ -179,6 +190,10 @@ console.log('INFORMATION ICON:', iconMap.information);
             {
                 attachment: config.dashboardImage,
                 name: 'ticket-dashboard.png'
+            },
+            {
+                attachment: path.join(__dirname, '..', 'images', 'image.png'),
+                name: 'image.png'
             }
         ]
     };
