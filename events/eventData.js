@@ -1,48 +1,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-
 const runtimePath = path.join(__dirname, 'events.runtime.json');
-
-const DEFAULT_DATA = {
-    current: null
-};
-
-function clone(value) {
-    return JSON.parse(JSON.stringify(value));
-}
-
 function loadData() {
-    try {
-        const parsed = JSON.parse(fs.readFileSync(runtimePath, 'utf8'));
-        return {
-            ...clone(DEFAULT_DATA),
-            ...parsed,
-            current: parsed?.current || null
-        };
-    } catch {
-        return clone(DEFAULT_DATA);
-    }
+  try { const obj = JSON.parse(fs.readFileSync(runtimePath, 'utf8')); return { events: obj.events && typeof obj.events === 'object' ? obj.events : {} }; }
+  catch { return { events: {} }; }
 }
-
 function saveData(data) {
-    const clean = {
-        ...clone(DEFAULT_DATA),
-        ...data,
-        current: data?.current || null
-    };
-
-    fs.writeFileSync(runtimePath, JSON.stringify(clean, null, 2));
-    return clean;
+  const tmp = runtimePath + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify({ events: data.events || {} }, null, 2));
+  fs.renameSync(tmp, runtimePath);
 }
-
-function makeId(prefix = 'event') {
-    return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
-}
-
-module.exports = {
-    runtimePath,
-    loadData,
-    saveData,
-    makeId
-};
+function makeId() { return crypto.randomUUID().slice(0, 12); }
+module.exports = { loadData, saveData, makeId };
