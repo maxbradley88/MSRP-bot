@@ -9,7 +9,16 @@ const {
 } = require('discord.js');
 
 const STORE = path.join(__dirname, 'giveaways.json');
-const TZ = process.env.MSRP_GIVEAWAY_TIMEZONE || 'Australia/Adelaide';
+const DEFAULT_TZ = 'Australia/Melbourne';
+const AU_TIMEZONES = Object.freeze({
+  'Australia/Melbourne': 'Melbourne / Sydney / Canberra / Hobart (AEST/AEDT)',
+  'Australia/Adelaide': 'Adelaide (ACST/ACDT)',
+  'Australia/Brisbane': 'Brisbane (AEST)',
+  'Australia/Darwin': 'Darwin (ACST)',
+  'Australia/Perth': 'Perth (AWST)',
+  'Australia/Eucla': 'Eucla (ACWST)',
+  'Australia/Lord_Howe': 'Lord Howe Island (LHST/LHDT)'
+});
 const MONITOR_MS = 60_000;
 const GIVEAWAY_ROLE_ID = '1561287581897982042';
 let running = false;
@@ -32,21 +41,24 @@ const command = new SlashCommandBuilder()
   .setName('create-giveaway').setDescription('Create a timed MSRP giveaway.')
   .addStringOption(o => o.setName('name').setDescription('Prize or giveaway name').setRequired(true).setMaxLength(100))
   .addStringOption(o => o.setName('description').setDescription('Giveaway type or description').setRequired(true).setMaxLength(1200))
-  .addStringOption(o => o.setName('draw-date').setDescription('DD/MM/YYYY or YYYY-MM-DD (Adelaide time)').setRequired(true))
-  .addStringOption(o => o.setName('draw-time').setDescription('24-hour time HH:MM (Adelaide time)').setRequired(true))
+  .addStringOption(o => o.setName('draw-date').setDescription('DD/MM/YYYY or YYYY-MM-DD').setRequired(true))
+  .addStringOption(o => o.setName('draw-time').setDescription('24-hour time HH:MM in the selected timezone').setRequired(true))
+  .addStringOption(o => o.setName('timezone').setDescription('Timezone for the draw date/time (default Melbourne)').setRequired(false)
+    .addChoices(...Object.entries(AU_TIMEZONES).map(([value, name]) => ({ name, value }))))
   .addUserOption(o => o.setName('host').setDescription('Person hosting the giveaway').setRequired(true))
   .addIntegerOption(o => o.setName('winners').setDescription('Number of unique winners (1–20)').setRequired(true).setMinValue(1).setMaxValue(20))
   .addRoleOption(o => o.setName('required-role').setDescription('Optional role required to enter'))
   .addStringOption(o => o.setName('notes').setDescription('Optional additional notes').setMaxLength(500));
 
-function zonedParts(date) {
+function zonedParts(date, timezone) {
   const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
   }).formatToParts(date);
   return Object.fromEntries(parts.filter(x => x.type !== 'literal').map(x => [x.type, Number(x.value)]));
 }
-function parseDate(dateStr, timeStr) {
+function parseDate(dateStr, timeStr, timezone=DEFAULT_TZ) {
+  if (!Object.prototype.hasOwnProperty.call(AU_TIMEZONES, timezone)) return null;
   const d = String(dateStr || '').trim();
   const t = String(timeStr || '').trim();
   let y, mo, day;
@@ -61,13 +73,19 @@ function parseDate(dateStr, timeStr) {
   // Resolve IANA timezone including DST; reject nonexistent DST local times.
   let guess=nominal-10.5*3600_000;
   for (let i=0;i<4;i++) {
-    const p=zonedParts(new Date(guess));
+    const p=zonedParts(new Date(guess), timezone);
     const seen=Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute);
     guess += nominal-seen;
   }
-  const p=zonedParts(new Date(guess));
+  const p=zonedParts(new Date(guess), timezone);
   if ([p.year,p.month,p.day,p.hour,p.minute].join()!==[y,mo,day,hh,mm].join()) return null;
   return guess;
+}
+function timezoneLabel(instant, timezone=DEFAULT_TZ) {
+  const value = new Intl.DateTimeFormat('en-AU', {
+    timeZone: timezone, timeZoneName: 'short'
+  }).formatToParts(new Date(instant)).find(part => part.type === 'timeZoneName')?.value;
+  return `${AU_TIMEZONES[timezone] || timezone} — ${value || timezone}`;
 }
 function safeText(x) { return String(x || '').replace(/@/g,'@\u200b').replace(/<(?=[@#])/g,'<\u200b').trim(); }
 function findEmoji(guild) { const e=guild?.emojis?.cache?.find(e=>e.name==='msrp_event'); return e ? { id: e.id, name: e.name } : undefined; }
@@ -98,14 +116,15 @@ async function commandHandler(interaction) {
     await interaction.reply({content:'You need the Giveaway Team role to create giveaways.',flags:MessageFlags.Ephemeral});return true;
   }
   const o=interaction.options;
-  const drawAt=parseDate(o.getString('draw-date'),o.getString('draw-time'));
+  const timezone=o.getString('timezone') || DEFAULT_TZ;
+  const drawAt=parseDate(o.getString('draw-date'),o.getString('draw-time'),timezone);
   if (!drawAt || drawAt < Date.now()+60_000) {
-    await interaction.reply({content:`Enter a valid future date/time in ${TZ}. Dates use DD/MM/YYYY, times use HH:MM (24-hour). Current local time: ${new Intl.DateTimeFormat('en-AU',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
+    await interaction.reply({content:`Enter a valid future date/time (${timezoneLabel(drawAt || Date.now(), timezone)}). Dates use DD/MM/YYYY, times use HH:MM (24-hour). Current time in that timezone: ${new Intl.DateTimeFormat('en-AU',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
   }
   await interaction.deferReply({flags:MessageFlags.Ephemeral});
   const g={id:crypto.randomBytes(7).toString('hex'),guildId:interaction.guildId,channelId:interaction.channelId,
     messageId:null,name:o.getString('name'),description:o.getString('description'),
-    drawAt,hostId:o.getUser('host').id,winners:o.getInteger('winners'),
+    drawAt,timezone,hostId:o.getUser('host').id,winners:o.getInteger('winners'),
     requiredRoleId:o.getRole('required-role')?.id || null,notes:o.getString('notes')||null,
     entries:[],status:'open',createdAt:Date.now(),resultMessageId:null};
   try {
