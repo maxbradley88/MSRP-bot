@@ -100,6 +100,8 @@ const {
 
 const mainDashboard = require('./mainDashboard/dashboardSystem');
 const eventSystem = require('./events/eventSystem');
+// MSRP Events rebuild v2 — deployment marker, shown on every startup.
+console.log('[MSRP EVENTS v2] Event module loaded; available commands:', eventSystem.commands.map(c => c.name).join(', '));
 
 
 const client = new Client({
@@ -1372,6 +1374,7 @@ client.once(
         // SAFE START: background polling and command registration are opt-in.
         // Discord commands already registered in this guild work without re-PUTing
         // the complete command list on every deploy/reconnect.
+        // One-time command sync; required for /create-event to appear in Discord.
         if (process.env.MSRP_REGISTER_COMMANDS === '1') {
             const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
             try {
@@ -1391,6 +1394,7 @@ client.once(
     ...eventSystem.commands.map(command => command.toJSON())
 ] }
                 );
+                console.log('[MSRP EVENTS v2] /create-event included in guild command sync.');
                 console.log('[STARTUP] Guild slash commands registered once. Remove MSRP_REGISTER_COMMANDS=1 now.');
             } catch (error) {
                 console.error('[STARTUP] Command registration failed:', error?.message || error);
