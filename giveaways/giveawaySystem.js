@@ -9,17 +9,10 @@ const {
 } = require('discord.js');
 
 const STORE = path.join(__dirname, 'giveaways.json');
-const DEFAULT_TZ = 'Australia/Melbourne';
-const AU_TIMEZONES = Object.freeze({
-  'Australia/Melbourne': 'Melbourne / Sydney / Canberra / Hobart (AEST/AEDT)',
-  'Australia/Adelaide': 'Adelaide (ACST/ACDT)',
-  'Australia/Brisbane': 'Brisbane (AEST)',
-  'Australia/Darwin': 'Darwin (ACST)',
-  'Australia/Perth': 'Perth (AWST)',
-  'Australia/Eucla': 'Eucla (ACWST)',
-  'Australia/Lord_Howe': 'Lord Howe Island (LHST/LHDT)'
-});
+const TZ = 'Australia/Melbourne'; // All entered draw dates/times use AEST or AEDT.
 const MONITOR_MS = 60_000;
+const REMINDER_BEFORE_MS = 10 * 60_000;
+const NOTIFY_ROLE_ID = '1561315149086855228';
 const GIVEAWAY_ROLE_ID = '1561287581897982042';
 let running = false;
 let monitor = null;
@@ -41,24 +34,21 @@ const command = new SlashCommandBuilder()
   .setName('create-giveaway').setDescription('Create a timed MSRP giveaway.')
   .addStringOption(o => o.setName('name').setDescription('Prize or giveaway name').setRequired(true).setMaxLength(100))
   .addStringOption(o => o.setName('description').setDescription('Giveaway type or description').setRequired(true).setMaxLength(1200))
-  .addStringOption(o => o.setName('draw-date').setDescription('DD/MM/YYYY or YYYY-MM-DD').setRequired(true))
-  .addStringOption(o => o.setName('draw-time').setDescription('24-hour time HH:MM in the selected timezone').setRequired(true))
-  .addStringOption(o => o.setName('timezone').setDescription('Timezone for the draw date/time (default Melbourne)').setRequired(false)
-    .addChoices(...Object.entries(AU_TIMEZONES).map(([value, name]) => ({ name, value }))))
+  .addStringOption(o => o.setName('draw-date').setDescription('Melbourne date DD/MM/YYYY (AEST/AEDT)').setRequired(true))
+  .addStringOption(o => o.setName('draw-time').setDescription('Melbourne time HH:MM, 24-hour (AEST/AEDT)').setRequired(true))
   .addUserOption(o => o.setName('host').setDescription('Person hosting the giveaway').setRequired(true))
   .addIntegerOption(o => o.setName('winners').setDescription('Number of unique winners (1–20)').setRequired(true).setMinValue(1).setMaxValue(20))
   .addRoleOption(o => o.setName('required-role').setDescription('Optional role required to enter'))
   .addStringOption(o => o.setName('notes').setDescription('Optional additional notes').setMaxLength(500));
 
-function zonedParts(date, timezone) {
+function zonedParts(date) {
   const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
   }).formatToParts(date);
   return Object.fromEntries(parts.filter(x => x.type !== 'literal').map(x => [x.type, Number(x.value)]));
 }
-function parseDate(dateStr, timeStr, timezone=DEFAULT_TZ) {
-  if (!Object.prototype.hasOwnProperty.call(AU_TIMEZONES, timezone)) return null;
+function parseDate(dateStr, timeStr) {
   const d = String(dateStr || '').trim();
   const t = String(timeStr || '').trim();
   let y, mo, day;
@@ -73,38 +63,68 @@ function parseDate(dateStr, timeStr, timezone=DEFAULT_TZ) {
   // Resolve IANA timezone including DST; reject nonexistent DST local times.
   let guess=nominal-10.5*3600_000;
   for (let i=0;i<4;i++) {
-    const p=zonedParts(new Date(guess), timezone);
+    const p=zonedParts(new Date(guess));
     const seen=Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute);
     guess += nominal-seen;
   }
-  const p=zonedParts(new Date(guess), timezone);
+  const p=zonedParts(new Date(guess));
   if ([p.year,p.month,p.day,p.hour,p.minute].join()!==[y,mo,day,hh,mm].join()) return null;
   return guess;
 }
-function timezoneLabel(instant, timezone=DEFAULT_TZ) {
+function timezoneLabel(instant) {
   const value = new Intl.DateTimeFormat('en-AU', {
-    timeZone: timezone, timeZoneName: 'short'
+    timeZone: TZ, timeZoneName: 'short'
   }).formatToParts(new Date(instant)).find(part => part.type === 'timeZoneName')?.value;
-  return `${AU_TIMEZONES[timezone] || timezone} — ${value || timezone}`;
+  // Australia/Melbourne is UTC+10 in winter (AEST) and UTC+11 in summer (AEDT).
+  if (value === 'GMT+11' || value === 'UTC+11' || value === 'AEDT') return 'AEDT (UTC+11)';
+  if (value === 'GMT+10' || value === 'UTC+10' || value === 'AEST') return 'AEST (UTC+10)';
+  return value || 'Australia/Melbourne';
 }
 function safeText(x) { return String(x || '').replace(/@/g,'@\u200b').replace(/<(?=[@#])/g,'<\u200b').trim(); }
-function findEmoji(guild) { const e=guild?.emojis?.cache?.find(e=>e.name==='msrp_event'); return e ? { id: e.id, name: e.name } : undefined; }
-function payload(g, guild, disabled=false) {
-  const time=Math.floor(g.drawAt/1000);
-  let body=`### 🎁 ${safeText(g.name)}\n${safeText(g.description)}\n\n`+
-    `⏳ **Draws:** <t:${time}:R> (<t:${time}:F>)\n`+
-    `👤 **Host:** <@${g.hostId}>\n`+
-    `🎟️ **Entries:** ${g.entries.length}\n`+
-    `🏆 **Winners:** ${g.winners}`;
-  if (g.requiredRoleId) body+=`\n\n**Conditions:**\n- Must have role: <@&${g.requiredRoleId}>`;
-  if (g.notes) body+=`\n\n-# ${safeText(g.notes)}`;
-  const c=new ContainerBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(body));
-  const b=new ButtonBuilder().setCustomId(`msrp_giveaway_enter:${g.id}`)
-    .setLabel(g.status==='ended'?'Giveaway Ended':`Enter${g.entries.length ? ` (${g.entries.length})` : ''}`)
-    .setStyle(ButtonStyle.Primary).setDisabled(disabled || g.status !== 'open');
-  const emoji=findEmoji(guild); if (emoji) b.setEmoji(emoji);
-  return {components:[c,new ActionRowBuilder().addComponents(b)], flags:MessageFlags.IsComponentsV2, allowedMentions:{parse:[]} };
+function renderGiveaway(g, disabled=false) {
+  const time = Math.floor(g.drawAt / 1000);
+  const heading = `### ${safeText(g.name)}\n${safeText(g.description)}\n\n<@&${NOTIFY_ROLE_ID}>`;
+  const details = [
+    `**Draws:** <t:${time}:R>`,
+    `**Host:** <@${g.hostId}>`,
+    `**Entries:** ${g.entries.length}`,
+    `**Winners:** ${g.winners}`
+  ].join('\n');
+  const container = new ContainerBuilder()
+    .setAccentColor(0x2378D4)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(heading))
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(details));
+  if (g.requiredRoleId) {
+    container.addSeparatorComponents(new SeparatorBuilder());
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`**Entry requirement**\nHave the <@&${g.requiredRoleId}> role to participate.`)
+    );
+  }
+  if (g.notes) {
+    container.addSeparatorComponents(new SeparatorBuilder());
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${safeText(g.notes)}`));
+  }
+  const button = new ButtonBuilder()
+    .setCustomId(`msrp_giveaway_enter:${g.id}`)
+    .setLabel(g.status === 'ended' ? 'Giveaway ended' : 'Enter giveaway')
+    .setStyle(ButtonStyle.Primary)
+    .setDisabled(disabled || g.status !== 'open');
+  container.addSeparatorComponents(new SeparatorBuilder());
+  container.addActionRowComponents(new ActionRowBuilder().addComponents(button));
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: {parse: []}
+  };
 }
+function payload(g, guild, disabled=false) { return renderGiveaway(g,disabled); }
+function announcementPayload(g, guild) {
+  const p = renderGiveaway(g,false);
+  p.allowedMentions = {roles:[NOTIFY_ROLE_ID],parse:[]};
+  return p;
+}
+
 function rolePresent(interaction, roleId) {
   if (!roleId) return true;
   const roles=interaction.member?.roles;
@@ -116,19 +136,18 @@ async function commandHandler(interaction) {
     await interaction.reply({content:'You need the Giveaway Team role to create giveaways.',flags:MessageFlags.Ephemeral});return true;
   }
   const o=interaction.options;
-  const timezone=o.getString('timezone') || DEFAULT_TZ;
-  const drawAt=parseDate(o.getString('draw-date'),o.getString('draw-time'),timezone);
+  const drawAt=parseDate(o.getString('draw-date'),o.getString('draw-time'));
   if (!drawAt || drawAt < Date.now()+60_000) {
-    await interaction.reply({content:`Enter a valid future date/time (${timezoneLabel(drawAt || Date.now(), timezone)}). Dates use DD/MM/YYYY, times use HH:MM (24-hour). Current time in that timezone: ${new Intl.DateTimeFormat('en-AU',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
+    await interaction.reply({content:`Enter a valid future date/time (${timezoneLabel(drawAt || Date.now())}). Dates use DD/MM/YYYY, times use HH:MM (24-hour). Current time in that timezone: ${new Intl.DateTimeFormat('en-AU',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
   }
   await interaction.deferReply({flags:MessageFlags.Ephemeral});
   const g={id:crypto.randomBytes(7).toString('hex'),guildId:interaction.guildId,channelId:interaction.channelId,
     messageId:null,name:o.getString('name'),description:o.getString('description'),
-    drawAt,timezone,hostId:o.getUser('host').id,winners:o.getInteger('winners'),
+    drawAt,hostId:o.getUser('host').id,winners:o.getInteger('winners'),
     requiredRoleId:o.getRole('required-role')?.id || null,notes:o.getString('notes')||null,
-    entries:[],status:'open',createdAt:Date.now(),resultMessageId:null};
+    entries:[],status:'open',createdAt:Date.now(),resultMessageId:null,reminderMessageId:null,reminderPending:false};
   try {
-    const msg=await interaction.channel.send(payload(g,interaction.guild));
+    const msg=await interaction.channel.send(announcementPayload(g,interaction.guild));
     g.messageId=msg.id; store.giveaways[g.id]=g; persist();
     await interaction.editReply({content:`✅ Giveaway posted: ${msg.url}`});
   } catch (e) {console.error('[GIVEAWAYS] Creation failed:',e);await interaction.editReply({content:'Unable to post giveaway. Check Send Messages and Components permissions.'});}
@@ -190,8 +209,42 @@ async function draw(client,g) {
     g.status='ended';g.winnerIds=winnerIds;g.endedAt=Date.now();persist();
     try {const msg=await channel.messages.fetch(g.messageId);await msg.edit(payload(g,guild,true));}catch(e){console.warn('[GIVEAWAYS] Could not close giveaway button:',e.message);}
     await announceResult(channel,g);
+    await removeReminder(channel,g);
   } catch(e){console.error(`[GIVEAWAYS] Draw ${g.id} failed; will retry:`,e.message);}
   finally{locks.delete(g.id);}
+}
+async function sendReminder(client,g) {
+  if(g.reminderMessageId || g.reminderPending || g.status !== 'open')return;
+  // Record the attempt before sending: protects against repeated pings on restarts.
+  g.reminderPending=true;
+  persist();
+  try {
+    const channel=await client.channels.fetch(g.channelId);
+    if(!channel?.send)throw new Error('Channel not accessible');
+    const container=new ContainerBuilder()
+      .setAccentColor(0xE7A334)
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`<@&${NOTIFY_ROLE_ID}>\n\n### Last chance to enter\n**${safeText(g.name)}** is drawing <t:${Math.floor(g.drawAt/1000)}:R>.\n\nEnter using the giveaway button above before entries close.`));
+    const msg=await channel.send({
+      components:[container],
+      flags:MessageFlags.IsComponentsV2,
+      reply:{messageReference:g.messageId,failIfNotExists:false},
+      allowedMentions:{roles:[NOTIFY_ROLE_ID],parse:[]}
+    });
+    g.reminderMessageId=msg.id;
+    persist();
+  }catch(e){console.warn(`[GIVEAWAYS] Reminder ${g.id} failed:`,e.message);}
+}
+async function removeReminder(channel,g) {
+  if(!g.reminderMessageId)return;
+  try {
+    const msg=await channel.messages.fetch(g.reminderMessageId);
+    await msg.delete();
+    g.reminderMessageId=null;
+    persist();
+  }catch(e){
+    if(e.code===10008){g.reminderMessageId=null;persist();}
+    else console.warn('[GIVEAWAYS] Reminder cleanup failed:',e.message);
+  }
 }
 async function announceResult(channel,g) {
   if(g.resultMessageId)return;
@@ -209,8 +262,12 @@ async function tick(client) {
   try {
     for(const g of Object.values(store.giveaways)) {
       if(g.status==='open' && g.drawAt<=Date.now())await draw(client,g);
+      else if(g.status==='open' && g.drawAt-Date.now() <= REMINDER_BEFORE_MS && g.drawAt>Date.now() && !g.reminderMessageId && !g.reminderPending) await sendReminder(client,g);
       else if(g.status==='ended' && !g.resultMessageId && g.winnerIds) {
         try {const ch=await client.channels.fetch(g.channelId);if(ch)await announceResult(ch,g);}catch(e){console.warn('[GIVEAWAYS] Announcement retry failed:',e.message);}
+      }
+      if(g.status==='ended' && g.reminderMessageId) {
+        try {const ch=await client.channels.fetch(g.channelId);if(ch)await removeReminder(ch,g);}catch(e){console.warn('[GIVEAWAYS] Reminder cleanup retry:',e.message);}
       }
     }
   }finally{running=false;}
