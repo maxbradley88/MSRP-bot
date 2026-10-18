@@ -31,7 +31,7 @@ const commandPermissions = {
     'coc-team-remove': [FOUNDERSHIP_ROLE_ID],
 
     // Event system — only the Event Team can create/manage events.
-    'event-vote': [EVENT_TEAM_ROLE_ID]
+    'create-event': [EVENT_TEAM_ROLE_ID]
 };
 
 const settings = {
@@ -76,5 +76,6 @@ async function checkCommandPermission(interaction) {
 
 module.exports = {
     commandPermissions,
+    EVENT_TEAM_ROLE_ID,
     checkCommandPermission
 };

@@ -10,7 +10,7 @@ const { loadData, saveData, makeId } = require('./eventData');
 
 const CHANNEL = '1547545145904472114';
 const NOTIFY_ROLE = '1548805132886745159';
-const STAFF_ROLE = '1558396994601615460';
+const { EVENT_TEAM_ROLE_ID: STAFF_ROLE } = require('../permissions/commandPermissions');
 const IMAGE = path.join(__dirname, '..', 'images', 'image.png');
 const TZ = 'Australia/Melbourne';
 const PREFIX = 'msrpev:';
