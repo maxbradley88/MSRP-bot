@@ -984,5 +984,6 @@ module.exports = {
     executeCommand,
     handleAutocomplete,
     handleInteraction,
-    ensureDashboardIcons
+    ensureDashboardIcons,
+    showApplications
 };

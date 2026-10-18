@@ -128,6 +128,16 @@ const client = new Client({
 });
 
 
+// Passive diagnostics: only records REST rate limits observed by discord.js.
+let msrpLastRestLimitLog = 0;
+client.rest.on('rateLimited', info => {
+    const now = Date.now();
+    if (now - msrpLastRestLimitLog < 60_000) return;
+    msrpLastRestLimitLog = now;
+    console.warn('[DISCORD RATE LIMIT]', { route: info?.route, method: info?.method,
+        retryAfterMs: info?.retryAfter, global: info?.global, scope: info?.scope });
+});
+
 require('./messages/sendMessage')(client);
 require('./announcements/announcementRelay')(client);
 
@@ -1358,106 +1368,16 @@ client.once(
 
 
 
-        const rest =
 
-            new REST({
-
-                version: '10'
-
-            }).setToken(
-
-                process.env.DISCORD_TOKEN
-
-            );
-
-
-        try {
-
-            const globalCommands =
-                await rest.get(
-                    Routes.applicationCommands(
-                        client.user.id
-                    )
-                );
-
-            for (const command of globalCommands) {
-
-                if (
-                    command.name ===
-                    'ticketsetup'
-                ) {
-
-                    await rest.delete(
-                        Routes.applicationCommand(
-                            client.user.id,
-                            command.id
-                        )
-                    );
-
-                    console.log(
-                        'Deleted old global /ticketsetup command.'
-                    );
-                }
-            }
-
-
-            const guildCommands =
-                await rest.get(
-                    Routes.applicationGuildCommands(
-                        client.user.id,
-                        process.env.DISCORD_GUILD_ID
-                    )
-                );
-
-            for (const command of guildCommands) {
-
-                if (
-                    command.name ===
-                    'ticketsetup'
-                ) {
-
-                    await rest.delete(
-                        Routes.applicationGuildCommand(
-                            client.user.id,
-                            process.env.DISCORD_GUILD_ID,
-                            command.id
-                        )
-                    );
-
-                    console.log(
-                        'Deleted old guild /ticketsetup command.'
-                    );
-                }
-            }
-
-        } catch (error) {
-
-            console.error(
-                'Failed to remove old /ticketsetup command:',
-                error
-            );
-
-        }
-
-
-
-        try {
-
-
-
-            await rest.put(
-
-                Routes.applicationGuildCommands(
-
-                    client.user.id,
-
-                    process.env.DISCORD_GUILD_ID
-
-                ),
-
-                {
-
-body: [
+        // SAFE START: background polling and command registration are opt-in.
+        // Discord commands already registered in this guild work without re-PUTing
+        // the complete command list on every deploy/reconnect.
+        if (process.env.MSRP_REGISTER_COMMANDS === '1') {
+            const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+            try {
+                await rest.put(
+                    Routes.applicationGuildCommands(client.user.id, process.env.DISCORD_GUILD_ID),
+                    { body: [
     sendTicketDashboardCommand.toJSON(),
     sessionDashboardCommand.data.toJSON(),
     roleBindingSystem.command.toJSON(),
@@ -1469,39 +1389,24 @@ body: [
     reactionRole.command.toJSON(),
     ...mainDashboard.commands.map(command => command.toJSON()),
     ...eventSystem.commands.map(command => command.toJSON())
-]
+] }
+                );
+                console.log('[STARTUP] Guild slash commands registered once. Remove MSRP_REGISTER_COMMANDS=1 now.');
+            } catch (error) {
+                console.error('[STARTUP] Command registration failed:', error?.message || error);
+            }
+        } else {
+            console.log('[STARTUP] Using existing slash commands; no REST registration.');
+        }
 
-                }
-
-            );
-
-
-
-            console.log(
-
-                'Slash commands registered.'
-
-            );
-
+        if (process.env.MSRP_BACKGROUND_TASKS === '1') {
+            console.log('[STARTUP] Background tasks enabled.');
             startDashboardAutoRefresh(client);
             startSessionLockdownWatcher();
             sessionShutdownCommand.resumeShutdownAnnouncementExpiry(client);
             eventSystem.startEventMonitor(client);
-
-
-
-        } catch (error) {
-
-
-
-            console.error(
-
-                'Failed to register slash commands:',
-
-                error
-
-            );
-
+        } else {
+            console.warn('[SAFE START] Background polling DISABLED. Commands, tickets and interaction handlers still run. Set MSRP_BACKGROUND_TASKS=1 only after safe testing.');
         }
 
     }
@@ -2791,34 +2696,19 @@ if (
 
 
 
-                if (
-
-                    interaction.customId ===
-
-                    'ticket_information'
-
-                ) {
-
-
-
-                    await interaction.reply({
-
-                        content:
-
-                            config.informationButton.message,
-
-                        flags:
-
-                            MessageFlags.Ephemeral
-
-                    });
-
-
-
+                if (interaction.customId === 'ticket_applications') {
+                    await mainDashboard.showApplications(interaction);
                     return;
-
                 }
 
+                // Handle information clicks from older already-posted dashboards.
+                if (interaction.customId === 'ticket_information') {
+                    await interaction.reply({
+                        content: '<#1547544258276364338>',
+                        flags: MessageFlags.Ephemeral
+                    });
+                    return;
+                }
 
 
                 // ==================================================

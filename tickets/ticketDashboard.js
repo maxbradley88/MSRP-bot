@@ -76,11 +76,9 @@ function createTicketDashboard(iconMap) {
 console.log('RULES ICON:', iconMap.ticketRules);
 console.log('INFORMATION ICON:', iconMap.information);
     const informationButton = new ButtonBuilder()
-        .setCustomId('ticket_information')
         .setLabel(config.informationButton.label)
-        .setStyle(
-            ButtonStyle[config.informationButton.buttonColor]
-        )
+        .setStyle(ButtonStyle.Link)
+        .setURL(`https://discord.com/channels/${config.guildId}/1547544258276364338`)
         .setEmoji({
             id: iconMap.information.id,
             name: iconMap.information.name
@@ -100,6 +98,13 @@ console.log('INFORMATION ICON:', iconMap.information);
 
 
     // ==========================================
+    // Applications reuses the exact main dashboard application response.
+    const applicationsButton = new ButtonBuilder()
+        .setCustomId('ticket_applications')
+        .setLabel('Applications')
+        .setStyle(ButtonStyle.Secondary);
+
+
     // DASHBOARD CONTAINER
     // ==========================================
 
@@ -136,7 +141,8 @@ console.log('INFORMATION ICON:', iconMap.information);
                 .addComponents(
                     rulesButton,
                     informationButton,
-                    communitySupportButton
+                    communitySupportButton,
+                    applicationsButton
                 )
         )
 
