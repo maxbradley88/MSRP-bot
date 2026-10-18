@@ -9,7 +9,7 @@ const {
 } = require('discord.js');
 
 const STORE = path.join(__dirname, 'giveaways.json');
-const TZ = 'Australia/Melbourne';
+const TZ = process.env.MSRP_GIVEAWAY_TIMEZONE || 'Australia/Adelaide';
 const MONITOR_MS = 60_000;
 const GIVEAWAY_ROLE_ID = '1561287581897982042';
 let running = false;
@@ -32,8 +32,8 @@ const command = new SlashCommandBuilder()
   .setName('create-giveaway').setDescription('Create a timed MSRP giveaway.')
   .addStringOption(o => o.setName('name').setDescription('Prize or giveaway name').setRequired(true).setMaxLength(100))
   .addStringOption(o => o.setName('description').setDescription('Giveaway type or description').setRequired(true).setMaxLength(1200))
-  .addStringOption(o => o.setName('draw-date').setDescription('DD/MM/YYYY or YYYY-MM-DD (Melbourne time)').setRequired(true))
-  .addStringOption(o => o.setName('draw-time').setDescription('24-hour time HH:MM (Melbourne time)').setRequired(true))
+  .addStringOption(o => o.setName('draw-date').setDescription('DD/MM/YYYY or YYYY-MM-DD (Adelaide time)').setRequired(true))
+  .addStringOption(o => o.setName('draw-time').setDescription('24-hour time HH:MM (Adelaide time)').setRequired(true))
   .addUserOption(o => o.setName('host').setDescription('Person hosting the giveaway').setRequired(true))
   .addIntegerOption(o => o.setName('winners').setDescription('Number of unique winners (1–20)').setRequired(true).setMinValue(1).setMaxValue(20))
   .addRoleOption(o => o.setName('required-role').setDescription('Optional role required to enter'))
@@ -59,7 +59,7 @@ function parseDate(dateStr, timeStr) {
   const nominal=Date.UTC(y,mo-1,day,hh,mm);
   if (new Date(Date.UTC(y,mo-1,day)).getUTCDate() !== day) return null;
   // Resolve IANA timezone including DST; reject nonexistent DST local times.
-  let guess=nominal-11*3600_000;
+  let guess=nominal-10.5*3600_000;
   for (let i=0;i<4;i++) {
     const p=zonedParts(new Date(guess));
     const seen=Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute);
@@ -100,7 +100,7 @@ async function commandHandler(interaction) {
   const o=interaction.options;
   const drawAt=parseDate(o.getString('draw-date'),o.getString('draw-time'));
   if (!drawAt || drawAt < Date.now()+60_000) {
-    await interaction.reply({content:'Enter a valid future Melbourne date/time. Dates use DD/MM/YYYY, times use HH:MM (24-hour).',flags:MessageFlags.Ephemeral});return true;
+    await interaction.reply({content:`Enter a valid future date/time in ${TZ}. Dates use DD/MM/YYYY, times use HH:MM (24-hour). Current local time: ${new Intl.DateTimeFormat('en-AU',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
   }
   await interaction.deferReply({flags:MessageFlags.Ephemeral});
   const g={id:crypto.randomBytes(7).toString('hex'),guildId:interaction.guildId,channelId:interaction.channelId,
