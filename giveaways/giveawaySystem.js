@@ -141,19 +141,32 @@ async function commandHandler(interaction) {
     await interaction.reply({content:`Enter a valid date/time (${timezoneLabel(drawAt || Date.now())}). Dates use DD/MM/YYYY, times use HH:MM (24-hour). Current time in that timezone: ${new Intl.DateTimeFormat('en-AU',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
   }
   await interaction.deferReply({flags:MessageFlags.Ephemeral});
+  // Backdated giveaways must never be open for entry, even briefly.
+  const createdAt = Date.now();
+  const alreadyEnded = drawAt <= createdAt;
   const g={id:crypto.randomBytes(7).toString('hex'),guildId:interaction.guildId,channelId:interaction.channelId,
     messageId:null,name:o.getString('name'),description:o.getString('description'),
     drawAt,hostId:o.getUser('host').id,winners:o.getInteger('winners'),
     requiredRoleId:o.getRole('required-role')?.id || null,notes:o.getString('notes')||null,
-    entries:[],status:'open',createdAt:Date.now(),resultMessageId:null,reminderMessageId:null,reminderPending:false};
+    entries:[],status:alreadyEnded ? 'ended' : 'open',createdAt,
+    resultMessageId:null,reminderMessageId:null,reminderPending:false,
+    ...(alreadyEnded ? {winnerIds:[],endedAt:createdAt} : {})};
   try {
     const msg=await interaction.channel.send(announcementPayload(g,interaction.guild));
     g.messageId=msg.id; store.giveaways[g.id]=g; persist();
-    if (drawAt <= Date.now()) {
-      // Past dates close immediately. There are no entrants at creation, so no winner can be selected.
-      await draw(interaction.client, g);
+    if (alreadyEnded) {
+      // The button was disabled in the initial message; report no entrants or winners.
+      // If this send fails, the regular monitor retries without re-opening entries.
+      try { await announceResult(interaction.channel,g); }
+      catch (error) { console.warn('[GIVEAWAYS] Past giveaway result will retry:',error.message); }
+    } else if (drawAt <= Date.now()) {
+      // Handles the clock crossing the draw time while Discord posts the message.
+      await draw(interaction.client,g);
     }
-    await interaction.editReply({content:drawAt<=Date.now() ? `Giveaway posted and closed immediately (the scheduled draw was in the past, so there were no entries): ${msg.url}` : `✅ Giveaway posted: ${msg.url}`});
+    const ended = g.status === 'ended';
+    await interaction.editReply({content:ended
+      ? `Giveaway posted and closed automatically${alreadyEnded ? ' (past draw time; no entries or winners)' : ''}: ${msg.url}`
+      : `✅ Giveaway posted: ${msg.url}`});
   } catch (e) {console.error('[GIVEAWAYS] Creation failed:',e);await interaction.editReply({content:'Unable to post giveaway. Check Send Messages and Components permissions.'});}
   return true;
 }
