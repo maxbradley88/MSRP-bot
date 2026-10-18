@@ -31,7 +31,8 @@ const commandPermissions = {
     'coc-team-remove': [FOUNDERSHIP_ROLE_ID],
 
     // Event system — only the Event Team can create/manage events.
-    'create-event': [EVENT_TEAM_ROLE_ID]
+    'create-event': [EVENT_TEAM_ROLE_ID],
+    'create-giveaway': ['1561287581897982042']
 };
 
 const settings = {

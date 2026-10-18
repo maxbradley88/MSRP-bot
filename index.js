@@ -100,8 +100,7 @@ const {
 
 const mainDashboard = require('./mainDashboard/dashboardSystem');
 const eventSystem = require('./events/eventSystem');
-// MSRP Events rebuild v2 — deployment marker, shown on every startup.
-console.log('[MSRP EVENTS v2] Event module loaded; available commands:', eventSystem.commands.map(c => c.name).join(', '));
+const giveawaySystem = require('./giveaways/giveawaySystem');
 
 
 const client = new Client({
@@ -1374,7 +1373,6 @@ client.once(
         // SAFE START: background polling and command registration are opt-in.
         // Discord commands already registered in this guild work without re-PUTing
         // the complete command list on every deploy/reconnect.
-        // One-time command sync; required for /create-event to appear in Discord.
         if (process.env.MSRP_REGISTER_COMMANDS === '1') {
             const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
             try {
@@ -1391,10 +1389,10 @@ client.once(
     sessionShutdownCommand.forceData.toJSON(),
     reactionRole.command.toJSON(),
     ...mainDashboard.commands.map(command => command.toJSON()),
-    ...eventSystem.commands.map(command => command.toJSON())
+    ...eventSystem.commands.map(command => command.toJSON()),
+    giveawaySystem.command.toJSON()
 ] }
                 );
-                console.log('[MSRP EVENTS v2] /create-event included in guild command sync.');
                 console.log('[STARTUP] Guild slash commands registered once. Remove MSRP_REGISTER_COMMANDS=1 now.');
             } catch (error) {
                 console.error('[STARTUP] Command registration failed:', error?.message || error);
@@ -1402,6 +1400,9 @@ client.once(
         } else {
             console.log('[STARTUP] Using existing slash commands; no REST registration.');
         }
+
+        // The giveaway timer checks local timestamps only; it performs no API polling.
+        giveawaySystem.start(client);
 
         if (process.env.MSRP_BACKGROUND_TASKS === '1') {
             console.log('[STARTUP] Background tasks enabled.');
@@ -1518,6 +1519,8 @@ if (
     }
 
 
+
+    if (await giveawaySystem.commandHandler(interaction)) return;
 
     if (await eventSystem.executeCommand(interaction, client)) {
         return;
@@ -1654,6 +1657,10 @@ client.on(
             // ==================================================
             // EVENT SYSTEM
             // ==================================================
+
+            if (
+                await giveawaySystem.entryHandler(interaction)
+            ) return;
 
             if (
                 await eventSystem.handleInteraction(
