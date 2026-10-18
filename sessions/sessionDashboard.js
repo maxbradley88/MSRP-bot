@@ -38,7 +38,10 @@ const dashboardRuntime = globalThis[DASHBOARD_RUNTIME_KEY] || (globalThis[DASHBO
     updater: null,
     refreshPromise: null,
     channel: null,
-    message: null
+    message: null,
+    lastSignature: null,
+    cooldownUntil: 0,
+    lastErrorLoggedAt: 0
 });
 
 function divider() {
@@ -420,8 +423,16 @@ function startSessionDashboardUpdater(client) {
     startupTimer.unref?.();
 
     dashboardRuntime.updater = setInterval(() => {
+        if (Date.now() < dashboardRuntime.cooldownUntil) return;
         refreshSessionDashboard(client).catch(error => {
-            console.error('[SESSION DASHBOARD REFRESH ERROR]', error);
+            // Never retry immediately on API/Discord rate limits.
+            const retryAfterSeconds = Number(error?.retry_after ?? error?.rawError?.retry_after ?? 0);
+            const cooldownMs = Math.max(300_000, Math.ceil(retryAfterSeconds * 1000));
+            dashboardRuntime.cooldownUntil = Date.now() + cooldownMs;
+            if (Date.now() - dashboardRuntime.lastErrorLoggedAt > 300_000) {
+                console.error('[SESSION DASHBOARD] Paused refresh for at least 5 minutes after error:', error?.message || error);
+                dashboardRuntime.lastErrorLoggedAt = Date.now();
+            }
         });
     }, refreshMs);
 

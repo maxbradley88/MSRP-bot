@@ -1406,7 +1406,13 @@ client.once(
             sessionShutdownCommand.resumeShutdownAnnouncementExpiry(client);
             eventSystem.startEventMonitor(client);
         } else {
-            console.warn('[SAFE START] Background polling DISABLED. Commands, tickets and interaction handlers still run. Set MSRP_BACKGROUND_TASKS=1 only after safe testing.');
+            console.warn('[SAFE START] Other background polling DISABLED (lockdown, event monitor, scheduled shutdown).');
+            // Only the session dashboard refresh runs: 1 ER:LC check per 60s
+            // and a single Discord dashboard edit when values change.
+            if (process.env.MSRP_SESSION_DASHBOARD_REFRESH !== '0') {
+                startDashboardAutoRefresh(client);
+                console.log('[SAFE START] Session dashboard refresh ENABLED (minimum 60 seconds).');
+            }
         }
 
     }
