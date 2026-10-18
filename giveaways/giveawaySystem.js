@@ -83,7 +83,7 @@ function timezoneLabel(instant) {
 function safeText(x) { return String(x || '').replace(/@/g,'@\u200b').replace(/<(?=[@#])/g,'<\u200b').trim(); }
 function renderGiveaway(g, disabled=false) {
   const time = Math.floor(g.drawAt / 1000);
-  const heading = `### ${safeText(g.name)}\n${safeText(g.description)}\n\n<@&${NOTIFY_ROLE_ID}>`;
+  const heading = `### ${safeText(g.name)}\n${safeText(g.description)}`;
   const details = [
     `**Draws:** <t:${time}:R>`,
     `**Host:** <@${g.hostId}>`,
@@ -113,7 +113,7 @@ function renderGiveaway(g, disabled=false) {
   container.addSeparatorComponents(new SeparatorBuilder());
   container.addActionRowComponents(new ActionRowBuilder().addComponents(button));
   return {
-    components: [container],
+    components: [new TextDisplayBuilder().setContent(`<@&${NOTIFY_ROLE_ID}>`), container],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: {parse: []}
   };
@@ -137,8 +137,8 @@ async function commandHandler(interaction) {
   }
   const o=interaction.options;
   const drawAt=parseDate(o.getString('draw-date'),o.getString('draw-time'));
-  if (!drawAt || drawAt < Date.now()+60_000) {
-    await interaction.reply({content:`Enter a valid future date/time (${timezoneLabel(drawAt || Date.now())}). Dates use DD/MM/YYYY, times use HH:MM (24-hour). Current time in that timezone: ${new Intl.DateTimeFormat('en-AU',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
+  if (!drawAt) {
+    await interaction.reply({content:`Enter a valid date/time (${timezoneLabel(drawAt || Date.now())}). Dates use DD/MM/YYYY, times use HH:MM (24-hour). Current time in that timezone: ${new Intl.DateTimeFormat('en-AU',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date())}.`,flags:MessageFlags.Ephemeral});return true;
   }
   await interaction.deferReply({flags:MessageFlags.Ephemeral});
   const g={id:crypto.randomBytes(7).toString('hex'),guildId:interaction.guildId,channelId:interaction.channelId,
@@ -149,7 +149,11 @@ async function commandHandler(interaction) {
   try {
     const msg=await interaction.channel.send(announcementPayload(g,interaction.guild));
     g.messageId=msg.id; store.giveaways[g.id]=g; persist();
-    await interaction.editReply({content:`✅ Giveaway posted: ${msg.url}`});
+    if (drawAt <= Date.now()) {
+      // Past dates close immediately. There are no entrants at creation, so no winner can be selected.
+      await draw(interaction.client, g);
+    }
+    await interaction.editReply({content:drawAt<=Date.now() ? `Giveaway posted and closed immediately (the scheduled draw was in the past, so there were no entries): ${msg.url}` : `✅ Giveaway posted: ${msg.url}`});
   } catch (e) {console.error('[GIVEAWAYS] Creation failed:',e);await interaction.editReply({content:'Unable to post giveaway. Check Send Messages and Components permissions.'});}
   return true;
 }
@@ -223,9 +227,9 @@ async function sendReminder(client,g) {
     if(!channel?.send)throw new Error('Channel not accessible');
     const container=new ContainerBuilder()
       .setAccentColor(0xE7A334)
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`<@&${NOTIFY_ROLE_ID}>\n\n### Last chance to enter\n**${safeText(g.name)}** is drawing <t:${Math.floor(g.drawAt/1000)}:R>.\n\nEnter using the giveaway button above before entries close.`));
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`### Last chance to enter\n**${safeText(g.name)}** is drawing <t:${Math.floor(g.drawAt/1000)}:R>.\n\nEnter using the giveaway button above before entries close.`));
     const msg=await channel.send({
-      components:[container],
+      components:[new TextDisplayBuilder().setContent(`<@&${NOTIFY_ROLE_ID}>`),container],
       flags:MessageFlags.IsComponentsV2,
       reply:{messageReference:g.messageId,failIfNotExists:false},
       allowedMentions:{roles:[NOTIFY_ROLE_ID],parse:[]}
