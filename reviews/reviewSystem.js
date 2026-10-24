@@ -215,6 +215,12 @@ async function handleCommand(interaction) {
         repliedUser: false
       }
     });
+    // Automatically react to new reviews with confetti
+try {
+  await message.react("🎉");
+} catch (error) {
+  console.error("[REVIEWS] Failed to add confetti reaction:", error);
+}
     await reply(interaction, `Your review for <@${target.id}> has been submitted! [View review](${message.url})`);
   } catch (error) {
     console.error('[REVIEWS] Review submission failed:', error);
