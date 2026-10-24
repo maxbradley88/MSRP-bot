@@ -35,7 +35,9 @@ const commandPermissions = {
     'create-giveaway': ['1561287581897982042'],
     'infract': ['1547535121320779796', '1547525713853288448'],
     'revoke-infraction': ['1547535121320779796', '1547525713853288448'],
-    'promote': ['1547535121320779796', '1547525713853288448']
+    'promote': ['1547535121320779796', '1547525713853288448'],
+    // Anyone may submit a review, but the review handler restricts the channel.
+    'review': []
 };
 
 const settings = {
