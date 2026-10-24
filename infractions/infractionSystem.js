@@ -4,7 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const {
   SlashCommandBuilder, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder,
-  MediaGalleryBuilder, MediaGalleryItemBuilder, AttachmentBuilder, MessageFlags
+  MediaGalleryBuilder, MediaGalleryItemBuilder, SectionBuilder, ThumbnailBuilder, AttachmentBuilder, MessageFlags
 } = require('discord.js');
 
 const LOG_CHANNEL_ID = '1548592083441418371';
@@ -14,7 +14,7 @@ const LEVEL_ROLES = [
 ];
 const LEVEL_LABELS = ['Warning 1', 'Warning 2', 'Warning 3', 'Strike 1', 'Strike 2', 'Strike 3'];
 const DATA_FILE = path.join(__dirname, 'infractions.json');
-const BANNER = path.join(__dirname, '..', 'images', 'ticket-dashboard.png');
+const ICON = path.join(__dirname, 'infraction-icon.png');
 const FOOTER = path.join(__dirname, '..', 'images', 'image.png');
 let db = {records: {}, users: {}};
 try {
@@ -38,14 +38,14 @@ const infractCommand = new SlashCommandBuilder()
   .addStringOption(o => o.setName('type').setDescription('Type of infraction').setRequired(true)
     .addChoices({name:'Warning',value:'warning'}, {name:'Demotion',value:'demotion'},
       {name:'Termination',value:'termination'}, {name:'Other',value:'other'}))
-  .addStringOption(o => o.setName('evidence').setDescription('Optional evidence URL').setMaxLength(1000))
+  .addStringOption(o => o.setName('evidence').setDescription('Optional evidence (link or text)').setMaxLength(1000))
   .addStringOption(o => o.setName('notes').setDescription('Optional private notes shown in the log').setMaxLength(1000))
   .addStringOption(o => o.setName('custom-infraction').setDescription('Optional level: assigns all missing levels through it')
     .addChoices(...LEVEL_LABELS.map((name, i) => ({name,value:String(i)}))));
 const revokeCommand = new SlashCommandBuilder()
   .setName('revoke-infraction').setDescription('Revoke an existing staff infraction.')
   .addUserOption(o => o.setName('user').setDescription('Staff member').setRequired(true))
-  .addStringOption(o => o.setName('type').setDescription('Select an active infraction by its reason').setRequired(true).setAutocomplete(true))
+  .addStringOption(o => o.setName('punishment-revoked').setDescription('Choose an active infraction by its reason').setRequired(true).setAutocomplete(true))
   .addStringOption(o => o.setName('reason').setDescription('Reason for revoking this infraction').setRequired(true).setMaxLength(1000));
 
 function safe(s) {
@@ -53,28 +53,28 @@ function safe(s) {
 }
 function logContent(record, addedRoles) {
   return [
-    `-# **Type:** ${safe(record.type[0].toUpperCase()+record.type.slice(1))}`,
-    `-# **Reason:** ${safe(record.reason)}`,
-    `-# **Role(s) added:** ${addedRoles.length ? addedRoles.map(x => `<@&${x}>`).join(', ') : 'None'}`,
-    ...(record.evidence ? [`-# **Evidence:** ${safe(record.evidence)}`] : []),
-    ...(record.notes ? [`-# **Notes:** ${safe(record.notes)}`] : [])
+    `**Punishment**  ${safe(record.type[0].toUpperCase()+record.type.slice(1))}`,
+    `**Reason**  ${safe(record.reason)}`,
+    `**Roles added**  ${addedRoles.length ? addedRoles.map(x => `<@&${x}>`).join(' · ') : 'None'}`,
+    ...(record.evidence ? [`**Evidence**  ${safe(record.evidence)}`] : []),
+    ...(record.notes ? [`**Notes**  ${safe(record.notes)}`] : [])
   ].join('\n');
 }
 function containerFor(record, addedRoles, isRevocation = false, issuerId, reason) {
-  const c = new ContainerBuilder().setAccentColor(isRevocation ? 0x7D8492 : 0xD35459);
+  const c = new ContainerBuilder(); // neutral Discord container, no accent colour
   if (!isRevocation) {
-    c.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
-      .addSeparatorComponents(new SeparatorBuilder())
+    c.addSectionComponents(new SectionBuilder()
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `### ⚠️ Infraction\n**User:** <@${record.userId}>\n**Issuer:** <@${issuerId}>`))
+        `## Staff infraction\n**Member:** <@${record.userId}>\n**Issued by:** <@${issuerId}>`))
+      .setThumbnailAccessory(new ThumbnailBuilder().setURL('attachment://infraction-icon.png')))
       .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(logContent(record, addedRoles)));
   } else {
     c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-      `### Revoked infraction\n**User:** <@${record.userId}>\n**Revoked by:** <@${issuerId}>`))
+      `## Infraction revoked\n**Member:** <@${record.userId}>\n**Revoked by:** <@${issuerId}>`))
       .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `-# **Reason:** ${safe(reason)}\n-# **Role(s) removed:** ${addedRoles.length ? addedRoles.map(x=>`<@&${x}>`).join(', ') : 'None'}`));
+        `**Original infraction**  ${safe(record.reason)}\n**Revocation reason**  ${safe(reason)}`));
   }
   c.addSeparatorComponents(new SeparatorBuilder())
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
@@ -82,7 +82,7 @@ function containerFor(record, addedRoles, isRevocation = false, issuerId, reason
 }
 function attachments(isRevoke) {
   return isRevoke ? [new AttachmentBuilder(FOOTER, {name:'image.png'})] : [
-    new AttachmentBuilder(BANNER, {name:'ticket-dashboard.png'}),
+    new AttachmentBuilder(ICON, {name:'infraction-icon.png'}),
     new AttachmentBuilder(FOOTER, {name:'image.png'})
   ];
 }
@@ -119,15 +119,25 @@ async function reply(interaction, message) {
 }
 async function handleAutocomplete(interaction) {
   if (!interaction.isAutocomplete() || interaction.commandName !== 'revoke-infraction') return false;
-  const userId = interaction.options.getUser('user')?.id;
-  if (!db || !userId || !interaction.guildId) {await interaction.respond([]).catch(()=>{});return true;}
-  const search = String(interaction.options.getFocused() || '').toLowerCase();
-  const options = activeFor(interaction.guildId,userId)
-    .sort((a,b)=>b.createdAt-a.createdAt)
-    .filter(x=>`${x.reason} ${x.type}`.toLowerCase().includes(search))
-    .slice(0,25)
-    .map(x=>({name:`${x.reason.slice(0,65)} (${x.type}, ${new Date(x.createdAt).toLocaleDateString('en-AU')})`.slice(0,100),value:x.id}));
-  await interaction.respond(options).catch(()=>{});
+  try {
+    // During autocomplete, Discord sometimes only supplies a raw snowflake rather
+    // than a resolved User object. Look at the raw option as a fallback.
+    const userOption = interaction.options.get('user');
+    const userId = interaction.options.getUser('user')?.id || userOption?.value;
+    if (!db || !/^\d{15,22}$/.test(String(userId || '')) || !interaction.guildId) {
+      await interaction.respond([]); return true;
+    }
+    const search = String(interaction.options.getFocused() || '').toLowerCase();
+    const options = activeFor(interaction.guildId,String(userId))
+      .sort((a,b)=>b.createdAt-a.createdAt)
+      .filter(x=>`${x.reason} ${x.type}`.toLowerCase().includes(search))
+      .slice(0,25)
+      .map(x=>({name:`${x.reason.slice(0,70)} (${new Date(x.createdAt).toLocaleDateString('en-AU')})`.slice(0,100),value:x.id}));
+    await interaction.respond(options);
+  } catch (err) {
+    console.error('[INFRACTIONS] Autocomplete error:',err);
+    if (!interaction.responded) await interaction.respond([]).catch(()=>{});
+  }
   return true;
 }
 async function handleCommand(interaction) {
@@ -149,10 +159,10 @@ async function handleCommand(interaction) {
       const reason = interaction.options.getString('reason',true);
       const evidence = interaction.options.getString('evidence') || null;
       const notes = interaction.options.getString('notes') || null;
-      if (evidence) {try {const url=new URL(evidence);if (!['https:','http:'].includes(url.protocol)) throw new Error();} catch {await reply(interaction,'Evidence must be a valid http:// or https:// link.');return true;}}
       const custom = interaction.options.getString('custom-infraction');
       let target = custom === null ? -1 : Number(custom);
-      if (custom === null && (type==='warning' || type==='demotion')) {
+      if (custom === null && type==='termination') target = LEVEL_ROLES.length - 1;
+      if (custom === null && (type==='warning' || type==='demotion' || type==='other')) {
         target = LEVEL_ROLES.findIndex(id=>!member.roles.cache.has(id));
         if (target < 0) {await reply(interaction,'This member already has all six infraction roles. Select a custom level if recording an infraction without adding roles.');return true;}
       }
@@ -191,7 +201,7 @@ async function handleCommand(interaction) {
       save();
       await reply(interaction,`Infraction issued to <@${user.id}>. ${changed.added.length} role(s) added. [View log](${message.url})`);
     } else {
-      const id = interaction.options.getString('type',true);
+      const id = interaction.options.getString('punishment-revoked',true);
       const record = db.records[id];
       if (!record || record.revokedAt || record.userId!==user.id || record.guildId!==interaction.guildId) {
         await reply(interaction,'That infraction is not active for this user. Pick an entry from the autocomplete list.');return true;
