@@ -134,9 +134,7 @@ function buildReviewMessage({reviewerId, userId, rating, review, emojis}) {
   const announcement = `<@${reviewerId}> has created a review for <@${userId}>`;
   const details = [
     `> **Staff member:** <@${userId}>`,
-    '>',
     `> **Rating:** ${ratingStars(rating, emojis)}`,
-    '>',
     quotedReview(review)
   ].join('\n');
   return new ContainerBuilder()
