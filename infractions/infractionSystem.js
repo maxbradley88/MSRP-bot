@@ -14,7 +14,9 @@ const LEVEL_ROLES = [
 ];
 const LEVEL_LABELS = ['Warning 1', 'Warning 2', 'Warning 3', 'Strike 1', 'Strike 2', 'Strike 3'];
 const DATA_FILE = path.join(__dirname, 'infractions.json');
-const ICON = path.join(__dirname, 'infraction-icon.png');
+const BANNER = path.join(__dirname, '..', 'images', 'ticket-dashboard.png');
+const sharp = require('sharp');
+const lucide = require('lucide-static');
 const FOOTER = path.join(__dirname, '..', 'images', 'image.png');
 let db = {records: {}, users: {}};
 try {
@@ -51,30 +53,52 @@ const revokeCommand = new SlashCommandBuilder()
 function safe(s) {
   return String(s ?? '').replace(/@/g, '@\u200b').replace(/<(?=[@#!&])/g, '<\u200b').replace(/[\r\n]+/g, ' ').trim();
 }
-function logContent(record, addedRoles) {
-  return [
-    `**Punishment**  ${safe(record.type[0].toUpperCase()+record.type.slice(1))}`,
-    `**Reason**  ${safe(record.reason)}`,
-    `**Roles added**  ${addedRoles.length ? addedRoles.map(x => `<@&${x}>`).join(' · ') : 'None'}`,
-    ...(record.evidence ? [`**Evidence**  ${safe(record.evidence)}`] : []),
-    ...(record.notes ? [`**Notes**  ${safe(record.notes)}`] : [])
-  ].join('\n');
+// Use a native Discord custom emoji, never an image thumbnail.
+// If the icon does not exist yet, create it once from a white Lucide icon.
+async function getInfractionEmoji(guild) {
+  const name = 'msrp_infraction';
+  let emoji = guild.emojis.cache.find(x => x.name === name);
+  if (!emoji) {
+    const vector = lucide.ShieldAlert || lucide.ClipboardList;
+    if (!vector) throw new Error('Lucide infraction icon was not found.');
+    const svg = vector.replace('width="24"', 'width="128"').replace('height="24"', 'height="128"').replace(/currentColor/g, 'white');
+    const png = await sharp(Buffer.from(svg)).resize(128,128).png().toBuffer();
+    emoji = await guild.emojis.create({attachment:png,name,reason:'MSRP infraction heading icon'});
+    console.log('[INFRACTIONS] Created custom emoji :msrp_infraction:');
+  }
+  return `<:${emoji.name}:${emoji.id}>`;
 }
-function containerFor(record, addedRoles, isRevocation = false, issuerId, reason) {
-  const c = new ContainerBuilder(); // neutral Discord container, no accent colour
+function existingEmoji(guild, names) {
+  const emoji = guild.emojis.cache.find(x => names.includes(x.name));
+  return emoji ? `<:${emoji.name}:${emoji.id}> ` : '';
+}
+function containerFor(record, addedRoles, isRevocation = false, issuerId, reason, emoji = {}, guild) {
+  const c = new ContainerBuilder();
   if (!isRevocation) {
-    c.addSectionComponents(new SectionBuilder()
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `## Staff infraction\n**Member:** <@${record.userId}>\n**Issued by:** <@${issuerId}>`))
-      .setThumbnailAccessory(new ThumbnailBuilder().setURL('attachment://infraction-icon.png')))
+    c.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
+      new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
       .addSeparatorComponents(new SeparatorBuilder())
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(logContent(record, addedRoles)));
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `## ${emoji.infraction || ''} Infraction`))
+      .addSeparatorComponents(new SeparatorBuilder())
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `### ${existingEmoji(guild,['msrp_information_v2','msrp_information'])}Information\n`+
+        `**User:** <@${record.userId}>\n**Issuer:** <@${issuerId}>`))
+      .addSeparatorComponents(new SeparatorBuilder())
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent([
+        `### ${existingEmoji(guild,['msrp_ticket_rules'])}Infraction Details`,
+        `**Type:** ${safe(record.type[0].toUpperCase()+record.type.slice(1))}`,
+        `**Reason:** ${safe(record.reason)}`,
+        `**Role(s) added:** ${addedRoles.length ? addedRoles.map(id=>`<@&${id}>`).join(', ') : 'None'}`,
+        ...(record.evidence ? [`**Evidence:** ${safe(record.evidence)}`] : []),
+        ...(record.notes ? [`**Notes:** ${safe(record.notes)}`] : [])
+      ].join('\n')));
   } else {
     c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-      `## Infraction revoked\n**Member:** <@${record.userId}>\n**Revoked by:** <@${issuerId}>`))
+      `## Revoked Infraction\n\n**User:** <@${record.userId}>\n**Revoked by:** <@${issuerId}>`))
       .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `**Original infraction**  ${safe(record.reason)}\n**Revocation reason**  ${safe(reason)}`));
+        `**Original infraction:** ${safe(record.reason)}\n**Reason:** ${safe(reason)}`));
   }
   c.addSeparatorComponents(new SeparatorBuilder())
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
@@ -82,7 +106,7 @@ function containerFor(record, addedRoles, isRevocation = false, issuerId, reason
 }
 function attachments(isRevoke) {
   return isRevoke ? [new AttachmentBuilder(FOOTER, {name:'image.png'})] : [
-    new AttachmentBuilder(ICON, {name:'infraction-icon.png'}),
+    new AttachmentBuilder(BANNER, {name:'ticket-dashboard.png'}),
     new AttachmentBuilder(FOOTER, {name:'image.png'})
   ];
 }
@@ -187,7 +211,7 @@ async function handleCommand(interaction) {
       }
       let message;
       try {
-        message = await channel.send({components:[containerFor(record,changed.added,false,interaction.user.id)],
+        message = await channel.send({components:[containerFor(record,changed.added,false,interaction.user.id,{infraction:await getInfractionEmoji(interaction.guild)},interaction.guild)],
           files:attachments(false),flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[]}});
       } catch(err) {
         await member.fetch().catch(()=>{});
@@ -217,7 +241,7 @@ async function handleCommand(interaction) {
       }
       let message;
       try {
-        message = await channel.send({components:[containerFor(record,changed.removed,true,interaction.user.id,reason)],
+        message = await channel.send({components:[containerFor(record,changed.removed,true,interaction.user.id,reason,{},interaction.guild)],
           files:attachments(true),flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[]},
           ...(record.logMessageId ? {reply:{messageReference:record.logMessageId, failIfNotExists:false}} : {})});
       } catch(err) {
