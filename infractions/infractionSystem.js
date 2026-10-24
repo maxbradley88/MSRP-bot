@@ -85,28 +85,22 @@ async function getInfractionEmoji(guild) {
   }
 }
 function titleWithEmoji(emoji, text) { return `## ${emoji ? emoji + ' ' : ''}${text}`; }
-function subheading(guild, names, text) {
-  const emoji = existingEmoji(guild, names);
-  return `### ${emoji ? emoji + ' ' : ''}${text}`;
-}
-// Named options avoid positional-argument mistakes (which caused the guild.emojis error).
-function containerFor(record, {addedRoles = [], isRevocation = false, actorId, revokeReason = '', infractionEmoji = '', guild}) {
+// Keep the title as the only heading. Member names sit directly underneath it,
+// and one divider separates the identity block from the infraction details.
+function containerFor(record, {addedRoles = [], isRevocation = false, actorId, revokeReason = '', infractionEmoji = ''}) {
   const c = new ContainerBuilder();
   if (!isRevocation) {
     c.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
       new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
       .addSeparatorComponents(new SeparatorBuilder())
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        titleWithEmoji(infractionEmoji, 'Infraction')))
-      .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent([
-        subheading(guild, ['msrp_information_v2', 'msrp_information'], 'Information'),
+        titleWithEmoji(infractionEmoji, 'Infraction'),
+        '',
         `**User:** <@${record.userId}>`,
         `**Issuer:** <@${actorId}>`
       ].join('\n')))
       .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent([
-        subheading(guild, ['msrp_ticket_rules'], 'Infraction Details'),
         `**Type:** ${safe(record.type[0].toUpperCase() + record.type.slice(1))}`,
         `**Reason:** ${safe(record.reason)}`,
         `**Role(s) added:** ${addedRoles.length ? addedRoles.map(id => `<@&${id}>`).join(', ') : 'None'}`,
@@ -114,17 +108,14 @@ function containerFor(record, {addedRoles = [], isRevocation = false, actorId, r
         ...(record.notes ? [`**Notes:** ${safe(record.notes)}`] : [])
       ].join('\n')));
   } else {
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-      titleWithEmoji(infractionEmoji, 'Infraction Revoked')))
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent([
+      titleWithEmoji(infractionEmoji, 'Infraction Revoked'),
+      '',
+      `**User:** <@${record.userId}>`,
+      `**Revoked by:** <@${actorId}>`
+    ].join('\n')))
       .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent([
-        subheading(guild, ['msrp_information_v2', 'msrp_information'], 'Information'),
-        `**User:** <@${record.userId}>`,
-        `**Revoked by:** <@${actorId}>`
-      ].join('\n')))
-      .addSeparatorComponents(new SeparatorBuilder())
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent([
-        subheading(guild, ['msrp_ticket_rules'], 'Revocation Details'),
         `**Infraction type:** ${safe(record.type[0].toUpperCase() + record.type.slice(1))}`,
         `**Original reason:** ${safe(record.reason)}`,
         `**Revocation reason:** ${safe(revokeReason)}`
@@ -133,6 +124,11 @@ function containerFor(record, {addedRoles = [], isRevocation = false, actorId, r
   c.addSeparatorComponents(new SeparatorBuilder())
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
   return c;
+}
+// Notify only the staff member and the moderator who issued or revoked this
+// infraction. Warning/strike roles remain visible but never ping their members.
+function infractionMentions(userId, actorId) {
+  return {users: [...new Set([userId, actorId])], roles: [], repliedUser: false};
 }
 function attachments(isRevoke) {
   return isRevoke ? [new AttachmentBuilder(FOOTER, {name:'image.png'})] : [
@@ -242,7 +238,7 @@ async function handleCommand(interaction) {
       let message;
       try {
         message = await channel.send({components:[containerFor(record,{addedRoles:changed.added,actorId:interaction.user.id,infractionEmoji:await getInfractionEmoji(interaction.guild),guild:interaction.guild})],
-          files:attachments(false),flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[]}});
+          files:attachments(false),flags:MessageFlags.IsComponentsV2,allowedMentions:infractionMentions(record.userId,interaction.user.id)});
       } catch(err) {
         await member.fetch().catch(()=>{});
         await reconcile(member,interaction.guildId,user.id,activeFor(interaction.guildId,user.id)).catch(e=>console.error('[INFRACTIONS] Rollback failed:',e));
@@ -272,7 +268,7 @@ async function handleCommand(interaction) {
       let message;
       try {
         message = await channel.send({components:[containerFor(record,{isRevocation:true,actorId:interaction.user.id,revokeReason:reason,infractionEmoji:await getInfractionEmoji(interaction.guild),guild:interaction.guild})],
-          files:attachments(true),flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[]},
+          files:attachments(true),flags:MessageFlags.IsComponentsV2,allowedMentions:infractionMentions(record.userId,interaction.user.id),
           ...(record.logMessageId ? {reply:{messageReference:record.logMessageId, failIfNotExists:false}} : {})});
       } catch(err) {
         await member.fetch().catch(()=>{});
