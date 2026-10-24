@@ -53,52 +53,82 @@ const revokeCommand = new SlashCommandBuilder()
 function safe(s) {
   return String(s ?? '').replace(/@/g, '@\u200b').replace(/<(?=[@#!&])/g, '<\u200b').replace(/[\r\n]+/g, ' ').trim();
 }
-// Use a native Discord custom emoji, never an image thumbnail.
-// If the icon does not exist yet, create it once from a white Lucide icon.
-async function getInfractionEmoji(guild) {
-  const name = 'msrp_infraction';
-  let emoji = guild.emojis.cache.find(x => x.name === name);
-  if (!emoji) {
-    const vector = lucide.ShieldAlert || lucide.ClipboardList;
-    if (!vector) throw new Error('Lucide infraction icon was not found.');
-    const svg = vector.replace('width="24"', 'width="128"').replace('height="24"', 'height="128"').replace(/currentColor/g, 'white');
-    const png = await sharp(Buffer.from(svg)).resize(128,128).png().toBuffer();
-    emoji = await guild.emojis.create({attachment:png,name,reason:'MSRP infraction heading icon'});
-    console.log('[INFRACTIONS] Created custom emoji :msrp_infraction:');
-  }
-  return `<:${emoji.name}:${emoji.id}>`;
-}
+// Use small native Discord custom emoji codes, not thumbnails or additional images.
+// If the specific icon cannot be created (e.g. permissions or emoji limit),
+// fall back to another existing server icon instead of failing the infraction.
 function existingEmoji(guild, names) {
-  const emoji = guild.emojis.cache.find(x => names.includes(x.name));
-  return emoji ? `<:${emoji.name}:${emoji.id}> ` : '';
+  const emoji = guild?.emojis?.cache?.find(x => names.includes(x.name));
+  return emoji ? `<:${emoji.name}:${emoji.id}>` : '';
 }
-function containerFor(record, addedRoles, isRevocation = false, issuerId, reason, emoji = {}, guild) {
+async function getInfractionEmoji(guild) {
+  const fallback = () => existingEmoji(guild, ['msrp_ticket_rules', 'msrp_information_v2', 'msrp_information']);
+  if (!guild?.emojis) return fallback();
+  try {
+    const name = 'msrp_infraction';
+    let emoji = guild.emojis.cache.find(x => x.name === name);
+    if (!emoji && typeof guild.emojis.fetch === 'function') {
+      await guild.emojis.fetch();
+      emoji = guild.emojis.cache.find(x => x.name === name);
+    }
+    if (!emoji) {
+      const vector = lucide.ShieldAlert || lucide.ClipboardList;
+      if (!vector || typeof vector !== 'string') throw new Error('Lucide icon is missing');
+      const svg = vector.replace('width="24"', 'width="128"').replace('height="24"', 'height="128"').replace(/currentColor/g, 'white');
+      const png = await sharp(Buffer.from(svg)).resize(128, 128).png().toBuffer();
+      emoji = await guild.emojis.create({attachment:png, name, reason:'MSRP infraction heading icon'});
+      console.log('[INFRACTIONS] Created custom emoji :msrp_infraction:');
+    }
+    return `<:${emoji.name}:${emoji.id}>`;
+  } catch (err) {
+    console.warn('[INFRACTIONS] Custom infraction emoji unavailable, using existing icon:', err.message);
+    return fallback();
+  }
+}
+function titleWithEmoji(emoji, text) { return `## ${emoji ? emoji + ' ' : ''}${text}`; }
+function subheading(guild, names, text) {
+  const emoji = existingEmoji(guild, names);
+  return `### ${emoji ? emoji + ' ' : ''}${text}`;
+}
+// Named options avoid positional-argument mistakes (which caused the guild.emojis error).
+function containerFor(record, {addedRoles = [], isRevocation = false, actorId, revokeReason = '', infractionEmoji = '', guild}) {
   const c = new ContainerBuilder();
   if (!isRevocation) {
     c.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
       new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
       .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `## ${emoji.infraction || ''} Infraction`))
-      .addSeparatorComponents(new SeparatorBuilder())
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `### ${existingEmoji(guild,['msrp_information_v2','msrp_information'])}Information\n`+
-        `**User:** <@${record.userId}>\n**Issuer:** <@${issuerId}>`))
+        titleWithEmoji(infractionEmoji, 'Infraction')))
       .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent([
-        `### ${existingEmoji(guild,['msrp_ticket_rules'])}Infraction Details`,
-        `**Type:** ${safe(record.type[0].toUpperCase()+record.type.slice(1))}`,
+        subheading(guild, ['msrp_information_v2', 'msrp_information'], 'Information'),
+        `**User:** <@${record.userId}>`,
+        `**Issuer:** <@${actorId}>`
+      ].join('\n')))
+      .addSeparatorComponents(new SeparatorBuilder())
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent([
+        subheading(guild, ['msrp_ticket_rules'], 'Infraction Details'),
+        `**Type:** ${safe(record.type[0].toUpperCase() + record.type.slice(1))}`,
         `**Reason:** ${safe(record.reason)}`,
-        `**Role(s) added:** ${addedRoles.length ? addedRoles.map(id=>`<@&${id}>`).join(', ') : 'None'}`,
+        `**Role(s) added:** ${addedRoles.length ? addedRoles.map(id => `<@&${id}>`).join(', ') : 'None'}`,
         ...(record.evidence ? [`**Evidence:** ${safe(record.evidence)}`] : []),
         ...(record.notes ? [`**Notes:** ${safe(record.notes)}`] : [])
       ].join('\n')));
   } else {
     c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-      `## Revoked Infraction\n\n**User:** <@${record.userId}>\n**Revoked by:** <@${issuerId}>`))
+      titleWithEmoji(infractionEmoji, 'Infraction Revoked')))
       .addSeparatorComponents(new SeparatorBuilder())
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `**Original infraction:** ${safe(record.reason)}\n**Reason:** ${safe(reason)}`));
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent([
+        subheading(guild, ['msrp_information_v2', 'msrp_information'], 'Information'),
+        `**User:** <@${record.userId}>`,
+        `**Revoked by:** <@${actorId}>`
+      ].join('\n')))
+      .addSeparatorComponents(new SeparatorBuilder())
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent([
+        subheading(guild, ['msrp_ticket_rules'], 'Revocation Details'),
+        `**Infraction type:** ${safe(record.type[0].toUpperCase() + record.type.slice(1))}`,
+        `**Original reason:** ${safe(record.reason)}`,
+        `**Revocation reason:** ${safe(revokeReason)}`
+      ].join('\n')));
   }
   c.addSeparatorComponents(new SeparatorBuilder())
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
@@ -211,7 +241,7 @@ async function handleCommand(interaction) {
       }
       let message;
       try {
-        message = await channel.send({components:[containerFor(record,changed.added,false,interaction.user.id,{infraction:await getInfractionEmoji(interaction.guild)},interaction.guild)],
+        message = await channel.send({components:[containerFor(record,{addedRoles:changed.added,actorId:interaction.user.id,infractionEmoji:await getInfractionEmoji(interaction.guild),guild:interaction.guild})],
           files:attachments(false),flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[]}});
       } catch(err) {
         await member.fetch().catch(()=>{});
@@ -241,7 +271,7 @@ async function handleCommand(interaction) {
       }
       let message;
       try {
-        message = await channel.send({components:[containerFor(record,changed.removed,true,interaction.user.id,reason,{},interaction.guild)],
+        message = await channel.send({components:[containerFor(record,{isRevocation:true,actorId:interaction.user.id,revokeReason:reason,infractionEmoji:await getInfractionEmoji(interaction.guild),guild:interaction.guild})],
           files:attachments(true),flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[]},
           ...(record.logMessageId ? {reply:{messageReference:record.logMessageId, failIfNotExists:false}} : {})});
       } catch(err) {
