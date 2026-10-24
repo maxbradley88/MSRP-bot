@@ -32,7 +32,9 @@ const commandPermissions = {
 
     // Event system — only the Event Team can create/manage events.
     'create-event': [EVENT_TEAM_ROLE_ID],
-    'create-giveaway': ['1561287581897982042']
+    'create-giveaway': ['1561287581897982042'],
+    'infract': ['1547535121320779796', '1547525713853288448'],
+    'revoke-infraction': ['1547535121320779796', '1547525713853288448']
 };
 
 const settings = {

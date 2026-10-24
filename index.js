@@ -101,6 +101,7 @@ const {
 const mainDashboard = require('./mainDashboard/dashboardSystem');
 const eventSystem = require('./events/eventSystem');
 const giveawaySystem = require('./giveaways/giveawaySystem');
+const infractionSystem = require('./infractions/infractionSystem');
 
 
 const client = new Client({
@@ -1390,7 +1391,8 @@ client.once(
     reactionRole.command.toJSON(),
     ...mainDashboard.commands.map(command => command.toJSON()),
     ...eventSystem.commands.map(command => command.toJSON()),
-    giveawaySystem.command.toJSON()
+    giveawaySystem.command.toJSON(),
+    ...infractionSystem.commands.map(command => command.toJSON())
 ] }
                 );
                 console.log('[STARTUP] Guild slash commands registered once. Remove MSRP_REGISTER_COMMANDS=1 now.');
@@ -1478,6 +1480,8 @@ client.on(
 
         try {
 
+            if (interaction.isAutocomplete() && await infractionSystem.handleAutocomplete(interaction)) return;
+
             if (
                 interaction.isAutocomplete() &&
                 await eventSystem.handleAutocomplete(interaction)
@@ -1519,6 +1523,8 @@ if (
     }
 
 
+
+    if (await infractionSystem.handleCommand(interaction)) return;
 
     if (await giveawaySystem.commandHandler(interaction)) return;
 
