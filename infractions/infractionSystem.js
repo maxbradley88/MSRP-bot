@@ -43,7 +43,10 @@ const infractCommand = new SlashCommandBuilder()
   .addStringOption(o => o.setName('evidence').setDescription('Optional evidence (link or text)').setMaxLength(1000))
   .addStringOption(o => o.setName('notes').setDescription('Optional private notes shown in the log').setMaxLength(1000))
   .addStringOption(o => o.setName('custom-infraction').setDescription('Optional level: assigns all missing levels through it')
-    .addChoices(...LEVEL_LABELS.map((name, i) => ({name,value:String(i)}))));
+    .addChoices(...LEVEL_LABELS.map((name, i) => ({name,value:String(i)}))))
+  .addRoleOption(o => o.setName('role-to-remove')
+    .setDescription('Optional staff role to remove when the infraction type is Demotion')
+    .setRequired(false));
 const revokeCommand = new SlashCommandBuilder()
   .setName('revoke-infraction').setDescription('Revoke an existing staff infraction.')
   .addUserOption(o => o.setName('user').setDescription('Staff member').setRequired(true))
@@ -104,6 +107,7 @@ function containerFor(record, {addedRoles = [], isRevocation = false, actorId, r
         `**Type:** ${safe(record.type[0].toUpperCase() + record.type.slice(1))}`,
         `**Reason:** ${safe(record.reason)}`,
         `**Role(s) added:** ${addedRoles.length ? addedRoles.map(id => `<@&${id}>`).join(', ') : 'None'}`,
+        ...(record.removedStaffRoleId ? [`**Role removed:** <@&${record.removedStaffRoleId}>`] : []),
         ...(record.evidence ? [`**Evidence:** ${safe(record.evidence)}`] : []),
         ...(record.notes ? [`**Notes:** ${safe(record.notes)}`] : [])
       ].join('\n')));
@@ -210,6 +214,25 @@ async function handleCommand(interaction) {
       const evidence = interaction.options.getString('evidence') || null;
       const notes = interaction.options.getString('notes') || null;
       const custom = interaction.options.getString('custom-infraction');
+      const roleToRemove = interaction.options.getRole('role-to-remove');
+      // The extra role removal is only for demotions. Never remove an infraction
+      // ladder role here; those roles must remain managed by reconcile().
+      if (roleToRemove) {
+        if (type !== 'demotion') throw new Error('Role to Remove can only be used for a Demotion.');
+        const botMember = interaction.guild.members.me || await interaction.guild.members.fetchMe();
+        if (roleToRemove.guild?.id !== interaction.guildId || roleToRemove.id === interaction.guildId || roleToRemove.managed) {
+          throw new Error('Choose a regular staff role from this server to remove.');
+        }
+        if (LEVEL_ROLES.includes(roleToRemove.id)) {
+          throw new Error('Warning and strike roles are managed automatically; choose a staff rank role instead.');
+        }
+        if (roleToRemove.editable === false || roleToRemove.position >= botMember.roles.highest.position) {
+          throw new Error('My bot role must be above the staff role being removed.');
+        }
+        if (!member.roles.cache.has(roleToRemove.id)) {
+          throw new Error('This member does not have the selected staff role.');
+        }
+      }
       let target = custom === null ? -1 : Number(custom);
       if (custom === null && type==='termination') target = LEVEL_ROLES.length - 1;
       if (custom === null && (type==='warning' || type==='demotion' || type==='other')) {
@@ -224,15 +247,30 @@ async function handleCommand(interaction) {
       const record = {
         id:crypto.randomUUID(), guildId:interaction.guildId,userId:user.id,issuerId:interaction.user.id,
         type, reason,evidence,notes,requiredRoleIds,createdAt:Date.now(),revokedAt:null,
+        removedStaffRoleId:roleToRemove?.id || null,
         logMessageId:null, logChannelId:LOG_CHANNEL_ID
       };
       const records = [...activeFor(interaction.guildId,user.id),record];
       let changed;
-      try {changed = await reconcile(member,interaction.guildId,user.id,records);}
-      catch(err) { // Try restoring the roles to the previous persisted state.
+      let staffRoleRemoved = false;
+      const rollbackNewInfraction = async () => {
+        if (staffRoleRemoved) {
+          await member.roles.add(roleToRemove.id, 'Restore staff role after unsuccessful demotion')
+            .catch(e=>console.error('[INFRACTIONS] Staff role rollback failed:',e));
+        }
         await member.fetch().catch(()=>{});
-        await reconcile(member,interaction.guildId,user.id,activeFor(interaction.guildId,user.id)).catch(e=>console.error('[INFRACTIONS] Rollback failed:',e));
-        if(isNewUser) delete db.users[key];
+        await reconcile(member,interaction.guildId,user.id,activeFor(interaction.guildId,user.id))
+          .catch(e=>console.error('[INFRACTIONS] Infraction level rollback failed:',e));
+        if (isNewUser) delete db.users[key];
+      };
+      try {
+        changed = await reconcile(member,interaction.guildId,user.id,records);
+        if (roleToRemove) {
+          await member.roles.remove(roleToRemove.id, `Staff demotion by ${interaction.user.id}`);
+          staffRoleRemoved = true;
+        }
+      } catch(err) {
+        await rollbackNewInfraction();
         throw err;
       }
       let message;
@@ -240,9 +278,7 @@ async function handleCommand(interaction) {
         message = await channel.send({components:[containerFor(record,{addedRoles:changed.added,actorId:interaction.user.id,infractionEmoji:await getInfractionEmoji(interaction.guild),guild:interaction.guild})],
           files:attachments(false),flags:MessageFlags.IsComponentsV2,allowedMentions:infractionMentions(record.userId,interaction.user.id)});
       } catch(err) {
-        await member.fetch().catch(()=>{});
-        await reconcile(member,interaction.guildId,user.id,activeFor(interaction.guildId,user.id)).catch(e=>console.error('[INFRACTIONS] Rollback failed:',e));
-        if(isNewUser) delete db.users[key];
+        await rollbackNewInfraction();
         throw err;
       }
       record.logMessageId = message.id;

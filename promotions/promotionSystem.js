@@ -104,7 +104,7 @@ function buildAnnouncement({userId, issuerId, previousRoleId, newRoleId, reason,
     ].join('\n')))
     .addSeparatorComponents(new SeparatorBuilder())
     .addTextDisplayComponents(new TextDisplayBuilder().setContent([
-      `**Previous role:** ${previousRoleId ? `<@&${previousRoleId}>` : 'None removed'}`,
+      ...(previousRoleId ? [`**Previous role:** <@&${previousRoleId}>`] : []),
       `**New role:** <@&${newRoleId}>`,
       `**Reason:** ${escapeText(reason)}`
     ].join('\n')))
