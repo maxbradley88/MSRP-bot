@@ -107,6 +107,7 @@ const reviewSystem = require('./reviews/reviewSystem');
 const staffDashboard = require('./staffDashboard/staffDashboard');
 const resignationSystem = require('./resignations/resignationSystem');
 const trainingSystem = require('./training/trainingSystem');
+const formReviewSystem = require('./applications/formReviewSystem');
 
 
 const client = new Client({
@@ -1405,7 +1406,8 @@ client.once(
     resignationSystem.command.toJSON(),
     trainingSystem.command.toJSON(),
     trainingSystem.hostCommand.toJSON(),
-    trainingSystem.resultDashboardCommand.toJSON()
+    trainingSystem.resultDashboardCommand.toJSON(),
+    formReviewSystem.formManageCommand.toJSON()
 ] }
                 );
                 console.log('[STARTUP] Guild slash commands registered once. Remove MSRP_REGISTER_COMMANDS=1 now.');
@@ -1415,6 +1417,9 @@ client.once(
         } else {
             console.log('[STARTUP] Using existing slash commands; no REST registration.');
         }
+
+        // Recover any Google Forms webhook submissions from before a bot restart.
+        await formReviewSystem.recoverPending(client);
 
         // The giveaway timer checks local timestamps only; it performs no API polling.
         giveawaySystem.start(client);
@@ -1494,6 +1499,8 @@ client.on(
         try {
 
             if (interaction.isAutocomplete() && await staffDashboard.handleAutocomplete(interaction)) return;
+            if (await formReviewSystem.handleAutocomplete(interaction)) return;
+            if (await formReviewSystem.handleComponent(interaction)) return;
             if (await staffDashboard.handleComponent(interaction)) return;
             if (await trainingSystem.handleComponent(interaction)) return;
             if (interaction.isAutocomplete() && await infractionSystem.handleAutocomplete(interaction)) return;
@@ -1551,6 +1558,7 @@ if (
     if (await resignationSystem.handleCommand(interaction)) return;
 
     if (await trainingSystem.handleCommand(interaction)) return;
+    if (await formReviewSystem.handleCommand(interaction)) return;
 
     if (await giveawaySystem.commandHandler(interaction)) return;
 
@@ -1664,6 +1672,12 @@ if (
     return;
 }
 
+
+client.on('messageCreate', message => {
+    void formReviewSystem.handleIncoming(message).catch(error => {
+        console.error('[APPLICATIONS] Submission listener error:', error);
+    });
+});
 
 client.on(
     'messageReactionAdd',

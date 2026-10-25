@@ -16,6 +16,7 @@ const {
 
 const { loadData, saveData, makeId } = require('./dashboardData');
 const { ensureDashboardIcons, getDashboardIcons } = require('./dashboardIcons');
+const { getForms, updateLegacyFormLink } = require('../applications/formReviewSystem');
 
 const TOP_IMAGE = path.join(__dirname, '..', 'images', 'ticket-dashboard.png');
 const BOTTOM_IMAGE = path.join(__dirname, '..', 'images', 'image.png');
@@ -526,6 +527,7 @@ async function executeCommand(interaction) {
         }
         data.applications[application] = rawLink ? safeUrl(rawLink) : null;
         saveData(data);
+        updateLegacyFormLink(application, data.applications[application]);
 
         const label = application === 'gameStaff' ? 'Game Staff' : 'Support Team';
         await interaction.reply({
@@ -844,29 +846,26 @@ function applicationButton(label, link) {
 }
 
 async function showApplications(interaction) {
-    const apps = loadData().applications;
+    const forms = getForms().filter(form => form.link);
     const container = new ContainerBuilder()
-        .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-                '## Apply at MSRP today!\n\n' +
-                'We would love to have you join our team! Select your application type below, if you are interested in a **fast pass** please open a higher up support ticket.'
-            )
-        )
-        .addSeparatorComponents(new SeparatorBuilder())
-        .addActionRowComponents(
-            new ActionRowBuilder().addComponents(
-                applicationButton('Game Staff', apps.gameStaff),
-                applicationButton('Support Team', apps.supportTeam)
-            )
-        )
-        .addSeparatorComponents(new SeparatorBuilder())
-        .addMediaGalleryComponents(
-            new MediaGalleryBuilder().addItems(
-                new MediaGalleryItemBuilder().setURL('attachment://image.png')
-            )
-        );
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+            '## Apply at MSRP today!\n\n' +
+            'We would love to have you join our team! Select an application below, or open a higher-up support ticket to enquire about a fast pass.'
+        ))
+        .addSeparatorComponents(new SeparatorBuilder());
 
-    await interaction.reply(componentsReply(container, { image: true }));
+    if (!forms.length) {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent('No applications are currently open.'));
+    } else {
+        for (let i = 0; i < forms.length; i += 5) {
+            const buttons = forms.slice(i, i+5).map(f => applicationButton(f.name, f.link));
+            container.addActionRowComponents(new ActionRowBuilder().addComponents(...buttons));
+        }
+    }
+    container.addSeparatorComponents(new SeparatorBuilder())
+        .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
+            new MediaGalleryItemBuilder().setURL('attachment://image.png')));
+    await interaction.reply(componentsReply(container, {image: true}));
 }
 
 async function showChainOfCommand(interaction) {
