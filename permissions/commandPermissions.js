@@ -42,6 +42,7 @@ const commandPermissions = {
     'add-staff-guide': [FOUNDERSHIP_ROLE_ID],
     'remove-staff-guide': [FOUNDERSHIP_ROLE_ID],
     'send-request-dashboard': [FOUNDERSHIP_ROLE_ID],
+    'host-training': ['1547543294056333323'],
     'resignation-log': ['1547535121320779796', FOUNDERSHIP_ROLE_ID]
 };
 

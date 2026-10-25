@@ -1403,7 +1403,8 @@ client.once(
     reviewSystem.command.toJSON(),
     ...staffDashboard.commands.map(command => command.toJSON()),
     resignationSystem.command.toJSON(),
-    trainingSystem.command.toJSON()
+    trainingSystem.command.toJSON(),
+    trainingSystem.hostCommand.toJSON()
 ] }
                 );
                 console.log('[STARTUP] Guild slash commands registered once. Remove MSRP_REGISTER_COMMANDS=1 now.');

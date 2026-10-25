@@ -8,12 +8,21 @@ const REQUESTS_CHANNEL = '1563762274399952896';
 const ANNOUNCEMENTS_CHANNEL = '1547549243844198450';
 const TRAINEE_ROLE = '1547541603772534814';
 const TRAINER_ROLE = '1547543294056333323';
-const PHASES = ['1563761372272009297', '1563761439322144828', '1563761428962349176'];
+const PHASES = ['1563761372272009297', '1563761439322144828'];
 const COOLDOWN = 24 * 60 * 60 * 1000;
 const DATA_PATH = path.join(__dirname, 'trainingRequests.json');
 const BANNER = path.join(__dirname, '..', 'images', 'ticket-dashboard.png');
 const FOOTER = path.join(__dirname, '..', 'images', 'image.png');
 const command = new SlashCommandBuilder().setName('send-request-dashboard').setDescription('Send or refresh the training request dashboard.');
+const hostCommand = new SlashCommandBuilder()
+  .setName('host-training')
+  .setDescription('Offer to host a Phase 1 or Phase 2 training session.')
+  .addIntegerOption(o => o.setName('phase').setDescription('Training phase').setRequired(true)
+    .addChoices({name:'Phase 1',value:1},{name:'Phase 2',value:2}))
+  .addStringOption(o => o.setName('notes').setDescription('Optional information about the training').setMaxLength(900));
+function safe(value) {
+  return String(value ?? '').trim().replace(/@/g, '@\u200b').replace(/<(?=[@#!&])/g, '<\u200b');
+}
 const busy = new Set();
 
 function load() {
@@ -48,9 +57,11 @@ function makeButton(label, id, style, emote, disabled = false) {
   return b;
 }
 function dashboard(guild) {
-  const buttons = PHASES.map((_, i) => makeButton(`Phase ${i + 1}`, `msrp_training_request_${i + 1}`, ButtonStyle.Secondary, numberEmoji(guild, i + 1)));
+  const buttons = PHASES.map((_, i) => makeButton(`Request Phase ${i + 1}`, `msrp_training_request_${i + 1}`, ButtonStyle.Secondary, numberEmoji(guild, i + 1)));
   return new ContainerBuilder()
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent('## Training Requests\nSelect your current phase to request a training session.\n-# Trainees may submit one request every 24 hours.'))
     .addSeparatorComponents(new SeparatorBuilder())
     .addActionRowComponents(new ActionRowBuilder().addComponents(buttons))
     .addSeparatorComponents(new SeparatorBuilder())
@@ -62,18 +73,68 @@ function requestMessage({ userId, phase, claimedBy, guild }) {
   return new ContainerBuilder()
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
     .addSeparatorComponents(new SeparatorBuilder())
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${heading}\n\n**User:** <@${userId}>\n**Type:** <@&${PHASES[phase - 1]}>${claimedBy ? `\n**Claimed by:** <@${claimedBy}>` : ''}`))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${heading}\n\n**Trainee:** <@${userId}>\n**Phase:** <@&${PHASES[phase - 1]}>\n**Status:** ${claimedBy ? `Claimed by <@${claimedBy}>` : 'Awaiting a trainer'}`))
     .addSeparatorComponents(new SeparatorBuilder())
     .addActionRowComponents(new ActionRowBuilder().addComponents(makeButton(claimedBy ? 'Claimed' : 'Claim', `msrp_training_claim_${phase}`, claimedBy ? ButtonStyle.Secondary : ButtonStyle.Success, null, Boolean(claimedBy))))
     .addSeparatorComponents(new SeparatorBuilder())
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
+}
+function hostMessage({ hostId, phase, notes, claimedBy, guild }) {
+  const emote = emoji(guild, 'msrp_appeal');
+  const title = emote ? `<${emote.animated ? 'a' : ''}:${emote.name}:${emote.id}>` : '';
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${title ? title + ' ' : ''}Phase ${phase} Training`))
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent([
+      `**Host:** <@${hostId}>`,
+      `**Claimed:** ${claimedBy ? `<@${claimedBy}>` : 'Unclaimed'}`,
+      `**Phase:** <@&${PHASES[phase - 1]}>`,
+      ...(notes ? [`**Notes:** ${safe(notes)}`] : [])
+    ].join('\n\n')))
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addActionRowComponents(new ActionRowBuilder().addComponents(
+      makeButton(claimedBy ? 'Claimed' : 'Claim Training', `msrp_training_host_claim_${phase}`,
+        claimedBy ? ButtonStyle.Secondary : ButtonStyle.Success, null, Boolean(claimedBy))
+    ))
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
+      new MediaGalleryItemBuilder().setURL('attachment://image.png')));
+  return container;
 }
 async function ephemeral(interaction, content) {
   if (interaction.deferred || interaction.replied) return interaction.editReply({ content });
   return interaction.reply({ content, flags: MessageFlags.Ephemeral });
 }
 async function handleCommand(interaction) {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== command.name) return false;
+  if (!interaction.isChatInputCommand()) return false;
+  if (interaction.commandName === hostCommand.name) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      if (!interaction.guild) throw new Error('This command is for the MSRP server only.');
+      const trainer = await interaction.guild.members.fetch(interaction.user.id);
+      if (!trainer.roles.cache.has(TRAINER_ROLE)) throw new Error('Only Staff Trainers can host training.');
+      if (!fs.existsSync(FOOTER)) throw new Error('Training footer image is missing.');
+      const phase = interaction.options.getInteger('phase', true);
+      const notes = interaction.options.getString('notes')?.trim() || '';
+      const channel = await interaction.guild.channels.fetch(REQUESTS_CHANNEL);
+      if (!channel || typeof channel.send !== 'function') throw new Error('Training requests channel is unavailable.');
+      const sent = await channel.send({
+        components: [hostMessage({ hostId: interaction.user.id, phase, notes, claimedBy: null, guild: interaction.guild })],
+        files: [new AttachmentBuilder(FOOTER, {name:'image.png'})],
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: {users:[interaction.user.id],roles:[],repliedUser:false}
+      });
+      const data = load();
+      data.requests[sent.id] = {kind:'host', hostId:interaction.user.id, phase, notes, claimedBy:null, createdAt:Date.now()};
+      save(data);
+      await ephemeral(interaction, `Training posted: ${sent.url}`);
+    } catch(e) {
+      console.error('[TRAINING] Host:', e);
+      await ephemeral(interaction, `Unable to host training: ${e.message}`).catch(() => {});
+    }
+    return true;
+  }
+  if (interaction.commandName !== command.name) return false;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     if (!interaction.guild) throw new Error('This command is for the MSRP server only.');
@@ -99,9 +160,10 @@ async function handleCommand(interaction) {
 async function handleComponent(interaction) {
   if (!interaction.isButton()) return false;
   const id = interaction.customId || '';
-  const requestMatch = /^msrp_training_request_([123])$/.exec(id);
-  const claimMatch = /^msrp_training_claim_([123])$/.exec(id);
-  if (!requestMatch && !claimMatch) return false;
+  const requestMatch = /^msrp_training_request_([12])$/.exec(id);
+  const claimMatch = /^msrp_training_claim_([12])$/.exec(id);
+  const hostClaimMatch = /^msrp_training_host_claim_([12])$/.exec(id);
+  if (!requestMatch && !claimMatch && !hostClaimMatch) return false;
   if (!interaction.guild) { await ephemeral(interaction, 'Server-only control.'); return true; }
   if (requestMatch) {
     const phase = Number(requestMatch[1]);
@@ -133,7 +195,7 @@ async function handleComponent(interaction) {
     } finally { busy.delete(key); }
     return true;
   }
-  const phase = Number(claimMatch[1]);
+  const phase = Number((claimMatch || hostClaimMatch)[1]);
   const key = `claim:${interaction.message.id}`;
   if (busy.has(key)) { await ephemeral(interaction, 'Someone is already claiming this training.'); return true; }
   busy.add(key);
@@ -144,9 +206,16 @@ async function handleComponent(interaction) {
     if (interaction.channelId !== REQUESTS_CHANNEL) throw new Error('This is not the training requests channel.');
     const data = load();
     const request = data.requests[interaction.message.id];
-    if (!request || request.phase !== phase) throw new Error('This request is not in the training records.');
+    if (!request || request.phase !== phase || Boolean(request.kind === 'host') !== Boolean(hostClaimMatch)) throw new Error('This request is not in the training records.');
     if (request.claimedBy) throw new Error(`This training is already claimed by <@${request.claimedBy}>.`);
-    await interaction.message.edit({ components: [requestMessage({ ...request, claimedBy: interaction.user.id, guild: interaction.guild })], attachments: [], files: files(), allowedMentions: { parse: [] } });
+    await interaction.message.edit({
+      components: [hostClaimMatch
+        ? hostMessage({ ...request, claimedBy: interaction.user.id, guild: interaction.guild })
+        : requestMessage({ ...request, claimedBy: interaction.user.id, guild: interaction.guild })],
+      attachments: [],
+      files: hostClaimMatch ? [new AttachmentBuilder(FOOTER, {name:'image.png'})] : files(),
+      allowedMentions: {parse:[]}
+    });
     request.claimedBy = interaction.user.id;
     save(data);
     await ephemeral(interaction, 'You have claimed this training.');
@@ -173,4 +242,4 @@ function registerAnnouncements(client) {
     } catch (e) { console.error('[TRAINING] Announcement relay failed:', e); }
   });
 }
-module.exports = { command, handleCommand, handleComponent, registerAnnouncements };
+module.exports = { command, hostCommand, handleCommand, handleComponent, registerAnnouncements };
