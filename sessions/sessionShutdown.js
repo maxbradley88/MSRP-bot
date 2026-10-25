@@ -145,7 +145,7 @@ function buildShutdownAnnouncement() {
         .setAccentColor(0x5865F2)
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                '## Session Shut Down\n' +
+                '## Session Shutdown\n' +
                 '**Thank you for role-playing with Melbourne State Roleplay!**\n\n' +
                 'This session has now ended. We hope to see you again in the next session! 👋'
             )
@@ -414,5 +414,6 @@ module.exports = {
     execute: runNormalShutdown,
     executeForce: runForceShutdown,
     removeShutdownAnnouncement,
+    sendShutdownAnnouncement,
     resumeShutdownAnnouncementExpiry
 };

@@ -68,6 +68,9 @@ const sessionTimesCommand =
 const sessionVoteCommand =
     require('./sessions/sessionVote');
 
+const sessionCancelVoteCommand =
+    require('./sessions/sessionCancelVote');
+
 const sessionForceStartCommand =
     require('./sessions/sessionForceStart');
 
@@ -1392,6 +1395,7 @@ client.once(
     roleBindingSystem.command.toJSON(),
     sessionTimesCommand.data.toJSON(),
     sessionVoteCommand.data.toJSON(),
+    sessionCancelVoteCommand.data.toJSON(),
     sessionForceStartCommand.data.toJSON(),
     sessionShutdownCommand.data.toJSON(),
     sessionShutdownCommand.forceData.toJSON(),
@@ -1651,6 +1655,11 @@ if (
             interaction
         );
 
+        return;
+    }
+
+    if (interaction.commandName === 'cancel-session-vote') {
+        await sessionCancelVoteCommand.execute(interaction);
         return;
     }
 

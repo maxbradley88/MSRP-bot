@@ -12,6 +12,7 @@ const commandPermissions = {
     'reaction-role-message': [FOUNDERSHIP_ROLE_ID],
 
     'session-vote': [SESSION_CONTROL_ROLE_ID],
+    'cancel-session-vote': [SESSION_CONTROL_ROLE_ID],
     'force-session': [SESSION_CONTROL_ROLE_ID],
     'session-shutdown': [SESSION_CONTROL_ROLE_ID],
     'force-shutdown': [SESSION_CONTROL_ROLE_ID],
