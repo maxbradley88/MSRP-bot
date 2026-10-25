@@ -8,6 +8,7 @@ const REQUESTS_CHANNEL = '1563762274399952896';
 const ANNOUNCEMENTS_CHANNEL = '1547549243844198450';
 const TRAINEE_ROLE = '1547541603772534814';
 const TRAINER_ROLE = '1547543294056333323';
+const COOLDOWN_BYPASS_ROLE = '1556177802267590686';
 const PHASES = ['1563761372272009297', '1563761439322144828'];
 const COOLDOWN = 24 * 60 * 60 * 1000;
 const DATA_PATH = path.join(__dirname, 'trainingRequests.json');
@@ -61,7 +62,7 @@ function dashboard(guild) {
   return new ContainerBuilder()
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
     .addSeparatorComponents(new SeparatorBuilder())
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent('## Training Requests\nSelect your current phase to request a training session.\n-# Trainees may submit one request every 24 hours.'))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent('## Training Requests\nSelect your current phase to request a training session.\n-# Trainees may submit one request every 24 hours (exempt role bypasses this limit).'))
     .addSeparatorComponents(new SeparatorBuilder())
     .addActionRowComponents(new ActionRowBuilder().addComponents(buttons))
     .addSeparatorComponents(new SeparatorBuilder())
@@ -73,7 +74,7 @@ function requestMessage({ userId, phase, claimedBy, guild }) {
   return new ContainerBuilder()
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
     .addSeparatorComponents(new SeparatorBuilder())
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${heading}\n\n**Trainee:** <@${userId}>\n**Phase:** <@&${PHASES[phase - 1]}>\n**Status:** ${claimedBy ? `Claimed by <@${claimedBy}>` : 'Awaiting a trainer'}`))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${heading}\n\n**Trainee:** <@${userId}>\n**Phase:** <@&${PHASES[phase - 1]}>\n**Status:** ${claimedBy ? `Claimed by <@${claimedBy}>` : 'Awaiting a trainer'}\n**Staff Trainers:** <@&${TRAINER_ROLE}>`))
     .addSeparatorComponents(new SeparatorBuilder())
     .addActionRowComponents(new ActionRowBuilder().addComponents(makeButton(claimedBy ? 'Claimed' : 'Claim', `msrp_training_claim_${phase}`, claimedBy ? ButtonStyle.Secondary : ButtonStyle.Success, null, Boolean(claimedBy))))
     .addSeparatorComponents(new SeparatorBuilder())
@@ -181,10 +182,10 @@ async function handleComponent(interaction) {
       const data = load();
       const last = Number(data.cooldowns[interaction.user.id] || 0);
       const remaining = last + COOLDOWN - Date.now();
-      if (remaining > 0) throw new Error(`You can request training again <t:${Math.ceil((last + COOLDOWN) / 1000)}:R>.`);
+      if (!member.roles.cache.has(COOLDOWN_BYPASS_ROLE) && remaining > 0) throw new Error(`You can request training again <t:${Math.ceil((last + COOLDOWN) / 1000)}:R>.`);
       const channel = await interaction.guild.channels.fetch(REQUESTS_CHANNEL);
       if (!channel || typeof channel.send !== 'function') throw new Error('Training requests channel is unavailable.');
-      const sent = await channel.send({ components: [requestMessage({ userId: interaction.user.id, phase, claimedBy: null, guild: interaction.guild })], files: files(), flags: MessageFlags.IsComponentsV2, allowedMentions: { users: [interaction.user.id], roles: [], repliedUser: false } });
+      const sent = await channel.send({ components: [requestMessage({ userId: interaction.user.id, phase, claimedBy: null, guild: interaction.guild })], files: files(), flags: MessageFlags.IsComponentsV2, allowedMentions: { users: [interaction.user.id], roles: [TRAINER_ROLE], repliedUser: false } });
       data.cooldowns[interaction.user.id] = Date.now();
       data.requests[sent.id] = { userId: interaction.user.id, phase, claimedBy: null, createdAt: Date.now() };
       save(data);
