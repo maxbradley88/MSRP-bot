@@ -41,6 +41,7 @@ const commandPermissions = {
     'send-staff-dashboard': [FOUNDERSHIP_ROLE_ID],
     'add-staff-guide': [FOUNDERSHIP_ROLE_ID],
     'remove-staff-guide': [FOUNDERSHIP_ROLE_ID],
+    'send-request-dashboard': [FOUNDERSHIP_ROLE_ID],
     'resignation-log': ['1547535121320779796', FOUNDERSHIP_ROLE_ID]
 };
 
