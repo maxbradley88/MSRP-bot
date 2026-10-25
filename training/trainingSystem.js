@@ -125,6 +125,15 @@ function requestMessage({ userId, phase, claimedBy, createdAt, guild }) {
     .addActionRowComponents(new ActionRowBuilder().addComponents(makeButton(claimedBy ? 'Claimed' : 'Claim Training', `msrp_training_claim_${phase}`, claimedBy ? ButtonStyle.Secondary : ButtonStyle.Success, null, Boolean(claimedBy))))
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
 }
+// Components V2 does not accept top-level `content`. Keep the trainer role
+// mention as a standalone Text Display *outside* the message container.
+// The caller controls whether this mention notifies trainers via allowedMentions.
+function requestComponents(record, guild) {
+  return [
+    new TextDisplayBuilder().setContent(`<@&${TRAINER_ROLE}>`),
+    requestMessage({ ...record, guild })
+  ];
+}
 function hostMessage({ hostId, phase, notes, claimedBy, guild }) {
   const emote = emoji(guild, 'msrp_appeal');
   const title = emote ? `<${emote.animated ? 'a' : ''}:${emote.name}:${emote.id}> ` : '';
@@ -288,7 +297,13 @@ async function handleComponent(interaction) {
       const channel = await interaction.guild.channels.fetch(REQUESTS_CHANNEL);
       if (!channel || typeof channel.send !== 'function') throw new Error('Training requests channel is unavailable.');
       const createdAt = Date.now();
-      const sent = await channel.send({ content: `<@&${TRAINER_ROLE}>`, components: [requestMessage({ userId: interaction.user.id, phase, claimedBy: null, createdAt, guild: interaction.guild })], files: files(), flags: MessageFlags.IsComponentsV2, allowedMentions: { users: [], roles: [TRAINER_ROLE], repliedUser: false } });
+      const sent = await channel.send({
+        // Standalone ping outside the container, with no legacy `content` field.
+        components: requestComponents({ userId: interaction.user.id, phase, claimedBy: null, createdAt }, interaction.guild),
+        files: files(),
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: { users: [], roles: [TRAINER_ROLE], repliedUser: false }
+      });
       data.cooldowns[interaction.user.id] = Date.now();
       data.requests[sent.id] = { userId: interaction.user.id, phase, claimedBy: null, createdAt };
       save(data);
@@ -324,9 +339,9 @@ async function handleComponent(interaction) {
     const trainerId = hostClaimMatch ? request.hostId : interaction.user.id;
     if (Object.values(data.requests).some(r => r.claimedBy && !r.completedAt && (r.kind === 'host' ? r.hostId : r.claimedBy) === trainerId)) throw new Error('This trainer already has an active training. Publish the results before claiming another.');
     await interaction.message.edit({
-      components: [hostClaimMatch
-        ? hostMessage({ ...request, claimedBy: interaction.user.id, guild: interaction.guild })
-        : requestMessage({ ...request, claimedBy: interaction.user.id, guild: interaction.guild })],
+      components: hostClaimMatch
+        ? [hostMessage({ ...request, claimedBy: interaction.user.id, guild: interaction.guild })]
+        : requestComponents({ ...request, claimedBy: interaction.user.id }, interaction.guild),
       attachments: [],
       files: files(),
       allowedMentions: {parse:[]}
@@ -456,9 +471,9 @@ async function confirmUnclaim(interaction, messageId) {
     try {
       const original = await channel.messages.fetch(messageId);
       await original.edit({
-        components: [record.kind === 'host'
-          ? hostMessage({...record, claimedBy:null, guild:interaction.guild})
-          : requestMessage({...record, claimedBy:null, guild:interaction.guild})],
+        components: record.kind === 'host'
+          ? [hostMessage({...record, claimedBy:null, guild:interaction.guild})]
+          : requestComponents({...record, claimedBy:null}, interaction.guild),
         files: files(), attachments: [], allowedMentions: {parse:[]}
       });
       reopened = true;
@@ -503,7 +518,7 @@ async function publishModal(interaction) {
     member = await interaction.guild.members.fetch(traineeId);
     const resultsChannel = await interaction.guild.channels.fetch(RESULTS_LOG_CHANNEL);
     if (!resultsChannel?.send) throw new Error('Results channel unavailable.');
-    if (!fs.existsSync(FOOTER)) throw new Error('Training footer image is missing.');
+    if (!fs.existsSync(BANNER) || !fs.existsSync(FOOTER)) throw new Error('Training banner or footer image is missing.');
     addId = phase === 1 ? PHASES[1] : PHASE2_GRADUATE_ROLE;
     const removeIds = phase === 1 ? [PHASES[0]] : [PHASES[1], TRAINEE_ROLE];
     if (result === 'pass') {
@@ -537,6 +552,9 @@ async function publishModal(interaction) {
       ...(result === 'pass' ? ['', `**Role added:** <@&${addId}>`, `**Roles removed:** ${removed.length ? removed.map(x => `<@&${x}>`).join(', ') : 'None'}`] : [])
     ].join('\n');
     const container = new ContainerBuilder()
+      .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
+        new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
+      .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(headline))
       .addSeparatorComponents(new SeparatorBuilder())
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(details))
@@ -545,7 +563,7 @@ async function publishModal(interaction) {
     let sent;
     try {
       sent = await resultsChannel.send({
-        components:[container], files:[new AttachmentBuilder(FOOTER,{name:'image.png'})],
+        components:[container], files:files(),
         flags:MessageFlags.IsComponentsV2,
         allowedMentions:{users:[...new Set([traineeId, interaction.user.id])],roles:[],repliedUser:false}
       });
@@ -584,9 +602,9 @@ async function synchronizeLegacyResets(client) {
       const channel = await guild.channels.fetch(record.kind === 'host' ? DASHBOARD_CHANNEL : REQUESTS_CHANNEL);
       const original = await channel.messages.fetch(messageId);
       await original.edit({
-        components: [record.kind === 'host'
-          ? hostMessage({...record, claimedBy:null, guild})
-          : requestMessage({...record, claimedBy:null, guild})],
+        components: record.kind === 'host'
+          ? [hostMessage({...record, claimedBy:null, guild})]
+          : requestComponents({...record, claimedBy:null}, guild),
         attachments:[], files:files(), allowedMentions:{parse:[]}
       });
       currentData.pendingResetMessages = currentData.pendingResetMessages.filter(id=>id!==messageId);
