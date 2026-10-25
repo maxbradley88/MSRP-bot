@@ -348,6 +348,20 @@ async function handleComponent(interaction) {
     });
     request.claimedBy = interaction.user.id;
     save(data);
+    // A trainee claiming a trainer-hosted offer removes only that hosted
+    // announcement. Ordinary trainee requests remain visible, grey and disabled.
+    // Persist the assignment first so results can still be published by the host.
+    if (hostClaimMatch) {
+      try {
+        await interaction.message.delete();
+      } catch (deleteError) {
+        // If deletion fails, the already-edited disabled button keeps the
+        // message safe from duplicate claims. An already-deleted post is fine.
+        if (deleteError.code !== 10008) {
+          console.error('[TRAINING] Hosted session was claimed but its post could not be deleted:', deleteError);
+        }
+      }
+    }
     await ephemeral(interaction, 'You have claimed this training.');
   } catch (e) {
     console.error('[TRAINING] Claim:', e);
