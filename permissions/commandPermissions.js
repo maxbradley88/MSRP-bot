@@ -33,14 +33,15 @@ const commandPermissions = {
     // Event system — only the Event Team can create/manage events.
     'create-event': [EVENT_TEAM_ROLE_ID],
     'create-giveaway': ['1561287581897982042'],
-    'infract': ['1547535121320779796', '1547525713853288448'],
-    'revoke-infraction': ['1547535121320779796', '1547525713853288448'],
-    'promote': ['1547535121320779796', '1547525713853288448'],
+    'infract': ['1547535121320779796', '1547525713853288448', '1547539082752561274', '1547536815475396668'],
+    'revoke-infraction': ['1547535121320779796', '1547525713853288448', '1547535997762277397'],
+    'promote': ['1547535121320779796', '1547525713853288448', '1547536815475396668'],
     // Anyone may submit a review, but the review handler restricts the channel.
     'review': [],
     'send-staff-dashboard': [FOUNDERSHIP_ROLE_ID],
     'add-staff-guide': [FOUNDERSHIP_ROLE_ID],
-    'remove-staff-guide': [FOUNDERSHIP_ROLE_ID]
+    'remove-staff-guide': [FOUNDERSHIP_ROLE_ID],
+    'resignation-log': ['1547535121320779796', FOUNDERSHIP_ROLE_ID]
 };
 
 const settings = {

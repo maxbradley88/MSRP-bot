@@ -105,6 +105,7 @@ const infractionSystem = require('./infractions/infractionSystem');
 const promotionSystem = require('./promotions/promotionSystem');
 const reviewSystem = require('./reviews/reviewSystem');
 const staffDashboard = require('./staffDashboard/staffDashboard');
+const resignationSystem = require('./resignations/resignationSystem');
 
 
 const client = new Client({
@@ -1398,7 +1399,8 @@ client.once(
     ...infractionSystem.commands.map(command => command.toJSON()),
     promotionSystem.command.toJSON(),
     reviewSystem.command.toJSON(),
-    ...staffDashboard.commands.map(command => command.toJSON())
+    ...staffDashboard.commands.map(command => command.toJSON()),
+    resignationSystem.command.toJSON()
 ] }
                 );
                 console.log('[STARTUP] Guild slash commands registered once. Remove MSRP_REGISTER_COMMANDS=1 now.');
@@ -1539,6 +1541,8 @@ if (
     if (await reviewSystem.handleCommand(interaction)) return;
 
     if (await staffDashboard.handleCommand(interaction)) return;
+
+    if (await resignationSystem.handleCommand(interaction)) return;
 
     if (await giveawaySystem.commandHandler(interaction)) return;
 
