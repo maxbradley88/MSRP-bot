@@ -143,11 +143,39 @@ async function handleCommand(interaction) {
     const channel = await interaction.guild.channels.fetch(DASHBOARD_CHANNEL);
     if (!channel || typeof channel.send !== 'function') throw new Error('Training dashboard channel is unavailable.');
     const data = load();
-    let existing = data.dashboardId ? await channel.messages.fetch(data.dashboardId).catch(() => null) : null;
+    let existing = null;
+    if (data.dashboardId) {
+      try {
+        existing = await channel.messages.fetch(data.dashboardId);
+      } catch (error) {
+        // A deleted dashboard is fine; other Discord/API errors should be reported.
+        if (error.code !== 10008) throw error;
+      }
+    }
     if (existing) {
-      await existing.edit({ components: [dashboard(interaction.guild)], attachments: [], files: files(), allowedMentions: { parse: [] } });
-    } else {
-      existing = await channel.send({ components: [dashboard(interaction.guild)], files: files(), flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
+      try {
+        existing = await existing.edit({
+          components: [dashboard(interaction.guild)],
+          attachments: [],
+          files: files(),
+          allowedMentions: { parse: [] }
+        });
+      } catch (error) {
+        // The dashboard can be deleted between fetching and editing it.
+        if (error.code !== 10008) throw error;
+        existing = null;
+      }
+    }
+    if (!existing) {
+      existing = await channel.send({
+        components: [dashboard(interaction.guild)],
+        files: files(),
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: { parse: [] }
+      });
+    }
+    // Persist just the dashboard ID; preserve requests and cooldowns.
+    if (data.dashboardId !== existing.id) {
       data.dashboardId = existing.id;
       save(data);
     }
