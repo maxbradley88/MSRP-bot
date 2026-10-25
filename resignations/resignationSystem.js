@@ -114,6 +114,12 @@ async function handleCommand(interaction) {
         flags: MessageFlags.IsComponentsV2,
         allowedMentions: {users: [...new Set([target.id, interaction.user.id])], roles: [], repliedUser: false}
       });
+      // Automatically react to resignations with a wave
+try {
+  await message.react("👋");
+} catch (error) {
+  console.error("[RESIGNATIONS] Failed to add wave reaction:", error);
+}
     } catch (error) {
       if (removedPosition) await member.roles.add(position.id, 'Rollback after failed resignation log').catch(e => console.error('[RESIGNATIONS] Could not restore position:', e));
       if (addedRetired) await member.roles.remove(RETIRED_ROLE_ID, 'Rollback after failed resignation log').catch(e => console.error('[RESIGNATIONS] Could not remove retired role:', e));
