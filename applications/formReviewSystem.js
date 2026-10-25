@@ -21,6 +21,9 @@ const RECORDS_FILE = path.join(DATA_DIR, 'applications.runtime.json');
 const BANNER = path.join(__dirname, '..', 'images', 'ticket-dashboard.png');
 const FOOTER = path.join(__dirname, '..', 'images', 'image.png');
 const inProgress = new Set();
+// A rejected old bridge can remain in the channel. Retry it, but avoid flooding
+// the host console with the same error every time the recovery check runs.
+const failureLoggedAt = new Map();
 
 const formManageCommand = new SlashCommandBuilder()
   .setName('form-manage')
@@ -201,10 +204,14 @@ async function handleIncoming(message) {
   const expectedWebhook=process.env.MSRP_FORMS_WEBHOOK_ID;
   const secret=process.env.MSRP_FORMS_SECRET;
   const queue=process.env.MSRP_FORMS_QUEUE_CHANNEL_ID || REVIEW_CHANNEL_ID;
-  if (!expectedWebhook || !secret || !message.webhookId || message.webhookId!==expectedWebhook || message.channelId!==queue) return;
+  if (!expectedWebhook || !secret || !message || message.channelId!==queue) return;
   let shouldDelete=false;
   let imported=false;
   try {
+    // A partial gateway message needs fetching before checking its webhook ID,
+    // content, and attachment. Fetched backlog messages already have this data.
+    if (message.partial) message=await message.fetch();
+    if (message.webhookId!==expectedWebhook) return;
     if (!message.content?.startsWith('msrp_form_bridge')) return;
     shouldDelete=true;
     const attachment=message.attachments?.first();
@@ -241,9 +248,17 @@ async function handleIncoming(message) {
       records[id]=record;
       saveRecords(records);
       imported=true;
+      console.log('[APPLICATIONS] Imported application:', form.name, '(message', posted.id + ')');
     } finally {inProgress.delete(`receive:${id}`);}
   } catch (error) {
-    console.error('[APPLICATIONS] Submission could not be imported:',error?.message||error);
+    const now=Date.now();
+    const lastLog=failureLoggedAt.get(message.id) || 0;
+    if (now-lastLog>=300_000) {
+      console.error('[APPLICATIONS] Submission could not be imported:',error?.message||error);
+      failureLoggedAt.set(message.id,now);
+      // Bound memory if many invalid transports arrive over a long runtime.
+      if (failureLoggedAt.size>200) failureLoggedAt.delete(failureLoggedAt.keys().next().value);
+    }
   } finally {
     // Bridge transport messages are not the review messages. Keep application channel tidy.
     if (shouldDelete && imported) await message.delete().catch(()=>{});

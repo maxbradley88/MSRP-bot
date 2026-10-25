@@ -1421,6 +1421,24 @@ client.once(
         // Recover any Google Forms webhook submissions from before a bot restart.
         await formReviewSystem.recoverPending(client);
 
+        // Back up the live messageCreate listener with a lightweight queue check.
+        // Some host/gateway sessions can miss webhook MESSAGE_CREATE events; without
+        // this fallback a submission would remain raw until the bot restarts.
+        let formRecoveryBusy = false;
+        const formRecoveryTimer = setInterval(async () => {
+            if (formRecoveryBusy || !client.isReady()) return;
+            formRecoveryBusy = true;
+            try {
+                await formReviewSystem.recoverPending(client);
+            } catch (error) {
+                console.error('[APPLICATIONS] Automatic recovery failed:', error?.message || error);
+            } finally {
+                formRecoveryBusy = false;
+            }
+        }, 30_000);
+        formRecoveryTimer.unref?.();
+        console.log('[APPLICATIONS] Live listener and 30-second recovery fallback active.');
+
         // The giveaway timer checks local timestamps only; it performs no API polling.
         giveawaySystem.start(client);
 
@@ -1674,6 +1692,9 @@ if (
 
 
 client.on('messageCreate', message => {
+    if (message.webhookId && message.webhookId === process.env.MSRP_FORMS_WEBHOOK_ID) {
+        console.log('[APPLICATIONS] Live webhook event received:', message.id);
+    }
     void formReviewSystem.handleIncoming(message).catch(error => {
         console.error('[APPLICATIONS] Submission listener error:', error);
     });
