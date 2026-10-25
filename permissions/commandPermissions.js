@@ -37,7 +37,10 @@ const commandPermissions = {
     'revoke-infraction': ['1547535121320779796', '1547525713853288448'],
     'promote': ['1547535121320779796', '1547525713853288448'],
     // Anyone may submit a review, but the review handler restricts the channel.
-    'review': []
+    'review': [],
+    'send-staff-dashboard': [FOUNDERSHIP_ROLE_ID],
+    'add-staff-guide': [FOUNDERSHIP_ROLE_ID],
+    'remove-staff-guide': [FOUNDERSHIP_ROLE_ID]
 };
 
 const settings = {
