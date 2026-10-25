@@ -1404,7 +1404,8 @@ client.once(
     ...staffDashboard.commands.map(command => command.toJSON()),
     resignationSystem.command.toJSON(),
     trainingSystem.command.toJSON(),
-    trainingSystem.hostCommand.toJSON()
+    trainingSystem.hostCommand.toJSON(),
+    trainingSystem.resultDashboardCommand.toJSON()
 ] }
                 );
                 console.log('[STARTUP] Guild slash commands registered once. Remove MSRP_REGISTER_COMMANDS=1 now.');
