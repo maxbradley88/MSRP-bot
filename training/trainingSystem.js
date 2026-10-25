@@ -106,7 +106,6 @@ function dashboard(guild) {
     .addSeparatorComponents(new SeparatorBuilder())
     .addActionRowComponents(new ActionRowBuilder().addComponents(buttons))
     .addSeparatorComponents(new SeparatorBuilder())
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent('-# Your request will be forwarded privately to the Staff Training team.'))
     .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
 }
 function requestMessage({ userId, phase, claimedBy, createdAt, guild }) {
@@ -406,13 +405,8 @@ async function startPublishing(interaction) {
   const traineeId = record.kind === 'host' ? record.claimedBy : record.userId;
   const modal = new ModalBuilder()
     .setCustomId(`msrp_training_publish_modal_${messageId}`)
-    .setTitle('Publish Training Results')
+    .setTitle(`Publish Phase ${record.phase} Results`)
     .addLabelComponents(
-      new LabelBuilder().setLabel('Training type')
-        .setDescription(`Your assigned trainee: Phase ${record.phase}`)
-        .setStringSelectMenuComponent(new StringSelectMenuBuilder()
-          .setCustomId('training_phase').setPlaceholder('Select the training phase')
-          .addOptions([{label:'Phase 1',value:'1',default:record.phase===1}, {label:'Phase 2',value:'2',default:record.phase===2}])),
       new LabelBuilder().setLabel('Result')
         .setStringSelectMenuComponent(new StringSelectMenuBuilder()
           .setCustomId('training_outcome').setPlaceholder('Choose the result')
@@ -497,11 +491,12 @@ async function publishModal(interaction) {
     if (!interaction.guild || !isTrainer(interaction)) throw new Error('Only Staff Trainers can submit training results.');
     const data = load(), record = data.requests[messageId], claim = currentClaim(data, interaction.user.id);
     if (!record || !claim || claim[0] !== messageId || record.completedAt) throw new Error('Your active training changed. Open Publish Results again.');
-    const phase = Number(interaction.fields.getStringSelectValues('training_phase')[0]);
+    // The training phase is already stored with the trainer's active claim.
+    const phase = Number(record.phase);
     result = interaction.fields.getStringSelectValues('training_outcome')[0];
     notes = interaction.fields.getTextInputValue('training_notes').trim();
-    if (![1,2].includes(phase) || !['pass','fail','other'].includes(result)) throw new Error('Choose a valid phase and result.');
-    if (phase !== record.phase) throw new Error(`Your claimed session is Phase ${record.phase}. Please select that phase.`);
+    if (![1,2].includes(phase)) throw new Error('This claim has an invalid training phase.');
+    if (!['pass','fail','other'].includes(result)) throw new Error('Choose a valid result.');
     if (!notes) throw new Error('Please enter training notes.');
     const traineeId = record.kind === 'host' ? record.claimedBy : record.userId;
     if (!traineeId) throw new Error('No trainee is assigned to this session.');
@@ -552,7 +547,7 @@ async function publishModal(interaction) {
       sent = await resultsChannel.send({
         components:[container], files:[new AttachmentBuilder(FOOTER,{name:'image.png'})],
         flags:MessageFlags.IsComponentsV2,
-        allowedMentions:{users:[traineeId, interaction.user.id],roles:[],repliedUser:false}
+        allowedMentions:{users:[...new Set([traineeId, interaction.user.id])],roles:[],repliedUser:false}
       });
     } catch(e) {
       for(const id of removed) await member.roles.add(id,'Training result rollback').catch(err => console.error('[TRAINING] Rollback add:',err));
