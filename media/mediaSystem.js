@@ -1,429 +1,160 @@
 'use strict';
-
-// MSRP Media Workspace: one dashboard, persistent tasks, management review.
-// Does not create custom server emojis or require task-claim commands.
-const fs = require('node:fs');
-const path = require('node:path');
+// MSRP Media Project Manager v2. Existing prototype data is left untouched.
+const fs=require('node:fs');
+const path=require('node:path');
 const {
-  SlashCommandBuilder, ChannelType, MessageFlags, AttachmentBuilder,
-  ContainerBuilder, TextDisplayBuilder, MediaGalleryBuilder,
-  MediaGalleryItemBuilder, SeparatorBuilder, ActionRowBuilder,
-  ButtonBuilder, ButtonStyle, ModalBuilder, LabelBuilder,
-  TextInputBuilder, TextInputStyle, StringSelectMenuBuilder,
-  UserSelectMenuBuilder, FileUploadBuilder, FileBuilder
-} = require('discord.js');
-
-const HEAD = '1550808851538780160';
-const SENIOR = '1564210385903419503';
-const MEMBER = '1558399994267176991';
-const TRIAL = '1550809222520770613';
-const FOUNDER = '1547525713853288448';
-const DATA = path.join(__dirname, 'mediaTasks.runtime.json');
-const TOP = path.join(__dirname, '..', 'images', 'ticket-dashboard.png');
-const BOTTOM = path.join(__dirname, '..', 'images', 'image.png');
-const locks = new Set();
-
-const command = new SlashCommandBuilder()
-  .setName('send-media-dashboard')
-  .setDescription('Post or refresh the Media Management dashboard.')
-  .addChannelOption(o => o.setName('approvals-channel').setDescription('Where new requests and work reviews go (private recommended)').addChannelTypes(ChannelType.GuildText))
-  .addChannelOption(o => o.setName('tasks-channel').setDescription('Where approved tasks are tracked').addChannelTypes(ChannelType.GuildText));
-
-function initial() { return {seq:0, tasks:{}, config:{}, dashboard:null}; }
-function load() {
-  try {
-    const obj = JSON.parse(fs.readFileSync(DATA, 'utf8'));
-    return { ...initial(), ...obj, tasks:obj.tasks || {}, config:obj.config || {} };
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    return initial();
+ SlashCommandBuilder,MessageFlags,AttachmentBuilder,ContainerBuilder,TextDisplayBuilder,
+ MediaGalleryBuilder,MediaGalleryItemBuilder,SeparatorBuilder,ActionRowBuilder,
+ ButtonBuilder,ButtonStyle,ModalBuilder,LabelBuilder,TextInputBuilder,
+ TextInputStyle,StringSelectMenuBuilder,UserSelectMenuBuilder,FileUploadBuilder
+}=require('discord.js');
+const PROJECT_CHANNEL='1564222211802398740';
+const APPROVAL_CHANNEL='1564222450147790930';
+const ROLES={head:'1550808851538780160',senior:'1564210385903419503',member:'1558399994267176991',trial:'1550809222520770613',founder:'1547525713853288448'};
+const TYPES=['Video Script','Video Editing','Video (Final Submission)','Image (Logo/Banner)','Image (In-Game Media)','Other'];
+const FILE=path.join(__dirname,'mediaProjects.runtime.json');
+const BANNER=path.join(__dirname,'..','images','ticket-dashboard.png');
+const FOOTER=path.join(__dirname,'..','images','image.png');
+const locks=new Set();
+const command=new SlashCommandBuilder().setName('send-media-dashboard').setDescription('Post or refresh the Media Project Manager.');
+function initial(){return {sequence:0,projects:{},dashboard:null};}
+function load(){try{const x=JSON.parse(fs.readFileSync(FILE,'utf8'));return {...initial(),...x,projects:x.projects||{}};}catch(e){if(e.code==='ENOENT')return initial();throw e;}}
+function save(x){fs.mkdirSync(path.dirname(FILE),{recursive:true});const tmp=FILE+'.'+process.pid+'.tmp';fs.writeFileSync(tmp,JSON.stringify(x,null,2));fs.renameSync(tmp,FILE);}
+function management(i){return Boolean(i.memberPermissions?.has('Administrator')||[ROLES.founder,ROLES.head,ROLES.senior].some(r=>i.member?.roles?.cache?.has(r)));}
+function media(i){return management(i)||[ROLES.member,ROLES.trial].some(r=>i.member?.roles?.cache?.has(r));}
+function icon(g,n){const e=g?.emojis?.cache?.find(x=>x.name===n&&x.available!==false);return e?e.toString()+' ':'';}
+function safe(s,n=1200){const x=String(s??'').trim().replace(/@/g,'@\u200b').replace(/<(?=[@!#&])/g,'<\u200b').replace(/([\\*_~`|])/g,'\\$1');return (x||'—').slice(0,n);}
+function status(s){return ({pending:'Pending Approval',denied:'Denied',not_started:'Not Started',in_progress:'In Progress',on_hold:'On Hold',awaiting_review:'Awaiting Review',changes_requested:'Changes Requested',completed:'Completed',cancelled:'Cancelled'})[s]||s;}
+function colour(s){return ({pending:0xE4AC36,denied:0xCF4C56,not_started:0x737D8B,in_progress:0x4389DA,on_hold:0xE4AC36,awaiting_review:0x9366CE,changes_requested:0xDC8D33,completed:0x38A66A,cancelled:0xCF4C56})[s]||0x737D8B;}
+function gallery(n){return new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${n}`));}
+function row(...components){return new ActionRowBuilder().addComponents(...components);}
+function btn(id,label,style=ButtonStyle.Secondary,disabled=false){return new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style).setDisabled(disabled);}
+function buttonRow(...items){return row(...items);}
+function base({banner=false,accent=null}={}){const c=new ContainerBuilder();if(accent!==null)c.setAccentColor(accent);if(banner)c.addMediaGalleryComponents(gallery('ticket-dashboard.png')).addSeparatorComponents(new SeparatorBuilder());return c;}
+function finish(c){return c.addSeparatorComponents(new SeparatorBuilder()).addMediaGalleryComponents(gallery('image.png'));}
+function section(c,t){c.addTextDisplayComponents(new TextDisplayBuilder().setContent(t));return c;}
+function files(banner=false){return [...(banner?[new AttachmentBuilder(BANNER,{name:'ticket-dashboard.png'})]:[]),new AttachmentBuilder(FOOTER,{name:'image.png'})];}
+function sendPayload(c,{banner=false,roleIds=[]}={}){return {components:[c],files:files(banner),flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[],users:[],roles:roleIds}};}
+function cards(g){const c=base({banner:true});section(c,`## ${icon(g,'msrp_appeal')}Media Project Manager\nCreate projects, track your progress and submit completed work for approval.`);c.addSeparatorComponents(new SeparatorBuilder());c.addActionRowComponents(buttonRow(btn('msrpm:new','New Project',ButtonStyle.Primary),btn('msrpm:mine','My Projects'),btn('msrpm:completed','Completed Projects'),btn('msrpm:overview','Management Overview')));return finish(c);}
+function projectText(p){return [`**Project:** ${safe(p.title,120)}`,`**Type:** ${safe(p.type,60)}`,`**Created by:** <@${p.creator}>`,`**Assigned to:** <@${p.assignee}>`,`**Status:** ${status(p.status)}`,`**Submission date:** ${safe(p.deadline,30)}`,``,`**Description**`,safe(p.description,1400),...(p.notes?[``,`**Project Notes**`,safe(p.notes,650)]:[])].join('\n');}
+function evidenceText(p){const s=p.submission;if(!s)return '';const pieces=[];if(s.link)pieces.push(`**Submission link:** ${safe(s.link,850)}`);if(s.files?.length)pieces.push(`**Attachments:** ${s.files.map(f=>`[${safe(f.name,60)}](${f.url})`).join(' · ')}`);if(s.notes)pieces.push(`**Submission notes:** ${safe(s.notes,900)}`);return pieces.join('\n\n');}
+function approvalCard(p,g){const c=base({accent:colour(p.status),banner:true});
+ if(p.status==='completed'){
+  section(c,`## ${icon(g,'msrp_appeal')}Completed Media Project  ·  #${p.id}\n**${safe(p.title,120)}**`);
+  c.addSeparatorComponents(new SeparatorBuilder());section(c,`**Completed by:** <@${p.assignee}>\n**Approved by:** <@${p.reviewedBy}>\n**Type:** ${safe(p.type,80)}\n**Completed:** <t:${Math.floor(p.completedAt/1000)}:f>`);
+  c.addSeparatorComponents(new SeparatorBuilder());section(c,`**Description**\n${safe(p.description,1400)}`);
+  if(evidenceText(p))c.addSeparatorComponents(new SeparatorBuilder()).addTextDisplayComponents(new TextDisplayBuilder().setContent(evidenceText(p)));
+  return finish(c);
+ }
+ section(c,`## ${icon(g,'msrp_appeal')}Media Project  ·  #${p.id}\n${projectText(p)}`);
+ if(p.feedback)c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Management Feedback**\n${safe(p.feedback,750)}`));
+ if(p.status==='awaiting_review'&&evidenceText(p))c.addSeparatorComponents(new SeparatorBuilder()).addTextDisplayComponents(new TextDisplayBuilder().setContent(evidenceText(p)));
+ c.addSeparatorComponents(new SeparatorBuilder());
+ if(p.status==='pending')c.addActionRowComponents(buttonRow(btn(`msrpm:approve:${p.id}`,'Approve',ButtonStyle.Success),btn(`msrpm:deny:${p.id}`,'Deny',ButtonStyle.Danger)));
+ else if(p.status==='awaiting_review')c.addActionRowComponents(buttonRow(btn(`msrpm:accept:${p.id}`,'Accept Work',ButtonStyle.Success),btn(`msrpm:revise:${p.id}`,'Return Draft'),btn(`msrpm:denywork:${p.id}`,'Reject Work',ButtonStyle.Danger)));
+ else if(!['completed','denied','cancelled'].includes(p.status))c.addActionRowComponents(buttonRow(btn(`msrpm:edit:${p.id}`,'Edit Details'),btn(`msrpm:status:${p.id}`,'Update Status'),btn(`msrpm:assign:${p.id}`,'Reassign')));
+ return finish(c);
+}
+function smallCard(p,g,owner=false){const c=base({accent:colour(p.status)});section(c,`## ${icon(g,'msrp_appeal')}${safe(p.title,110)}  ·  #${p.id}\n${projectText(p)}`);
+ if(p.feedback)section(c,`**Management Feedback**\n${safe(p.feedback,700)}`);
+ if(p.status==='completed'&&evidenceText(p)){c.addSeparatorComponents(new SeparatorBuilder());section(c,evidenceText(p));}
+ if(p.status==='pending')section(c,'-# Waiting for management approval. Project controls are unavailable.');
+ else if(!['denied','cancelled','completed','awaiting_review'].includes(p.status)){
+ c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(buttonRow(btn(`msrpm:status:${p.id}`,'Update Status'),btn(`msrpm:edit:${p.id}`,'Edit Details'),btn(`msrpm:submit:${p.id}`,'Submit Project',ButtonStyle.Primary)));
+ }
+ return finish(c);
+}
+function label(name,id,style=TextInputStyle.Short,required=true,value='',max=1000){const x=new TextInputBuilder().setCustomId(id).setStyle(style).setRequired(required).setMaxLength(max);if(value)x.setValue(String(value).slice(0,max));return new LabelBuilder().setLabel(name).setTextInputComponent(x);}
+function typeLabel(selected){const sel=new StringSelectMenuBuilder().setCustomId('type').setRequired(true).addOptions(TYPES.map(t=>({label:t,value:t,default:t===selected})));return new LabelBuilder().setLabel('Project type').setStringSelectMenuComponent(sel);}
+function createModal(p=null){return new ModalBuilder().setCustomId(p?`msrpm:form:edit:${p.id}`:'msrpm:form:new').setTitle(p?'Edit Media Project':'New Media Project').addLabelComponents(label('Project name','title',TextInputStyle.Short,true,p?.title,120),label('Project description','description',TextInputStyle.Paragraph,true,p?.description,1600),typeLabel(p?.type),label('Submission date (DD/MM/YY)','deadline',TextInputStyle.Short,true,p?.deadline,10),label('Notes (optional)','notes',TextInputStyle.Paragraph,false,p?.notes,800));}
+function submissionModal(p){return new ModalBuilder().setCustomId(`msrpm:form:submit:${p.id}`).setTitle('Submit Project Work').addLabelComponents(label('Work link (optional)','link',TextInputStyle.Short,false,'',900),label('Submission notes (optional)','notes',TextInputStyle.Paragraph,false,'',900),new LabelBuilder().setLabel('Attach finished files (optional)').setFileUploadComponent(new FileUploadBuilder().setCustomId('uploads').setRequired(false).setMinValues(0).setMaxValues(3)));}
+function reasonModal(p,op){return new ModalBuilder().setCustomId(`msrpm:form:${op}:${p.id}`).setTitle(op==='revise'?'Return for Changes':op==='deny'?'Deny Project':'Reject Submission').addLabelComponents(label('Reason / feedback','reason',TextInputStyle.Paragraph,true,'',800));}
+function dateCheck(value){const match=/^(\d{2})\/(\d{2})\/(\d{2}|\d{4})$/.exec(value);if(!match)throw Error('Submission date must use DD/MM/YY.');let y=Number(match[3]);if(y<100)y+=2000;const d=new Date(Date.UTC(y,Number(match[2])-1,Number(match[1])));if(d.getUTCFullYear()!==y||d.getUTCMonth()+1!==Number(match[2])||d.getUTCDate()!==Number(match[1]))throw Error('Submission date is not valid.');return value;}
+function link(s){if(!s)return '';try{const u=new URL(s);if(['http:','https:'].includes(u.protocol))return u.href;}catch{}throw Error('Work link must begin with https:// or http://.');}
+function log(p,actor,event){(p.history??=[]).push({at:Date.now(),by:actor,event});p.updatedAt=Date.now();}
+async function channel(i,id){const c=await i.guild.channels.fetch(id);if(!c||!c.isTextBased()||typeof c.send!=='function')throw Error('Media channel unavailable or bot cannot post there.');return c;}
+async function sync(i,p){if(!p.approvalMessageId)return;try{const c=await channel(i,APPROVAL_CHANNEL);const m=await c.messages.fetch(p.approvalMessageId);await m.edit(sendPayload(approvalCard(p,i.guild),{banner:true}));}catch(e){console.error('[MEDIA] Failed to refresh project #'+p.id,e);throw new Error('Project saved, but its management message could not be refreshed. Check channel permissions.');}}
+async function respond(i,msg){if(i.deferred||i.replied)return i.editReply({content:msg});return i.reply({content:msg,flags:MessageFlags.Ephemeral});}
+async function defer(i){if(!i.deferred&&!i.replied)await i.deferReply({flags:MessageFlags.Ephemeral});}
+function mineList(i,completed=false){return Object.values(load().projects).filter(p=>p.guildId===i.guildId&&(completed?p.status==='completed':p.assignee===i.user.id&&!['completed','cancelled','denied'].includes(p.status))).sort((a,b)=>b.updatedAt-a.updatedAt);}
+function overviewPicker(i, filter='all'){
+ const items=Object.values(load().projects).filter(p=>p.guildId===i.guildId && (filter==='all'?p.status!=='completed':p.status===filter)).sort((a,b)=>b.updatedAt-a.updatedAt);
+ const c=base({banner:false}); section(c,`## Management Overview\n**Filter:** ${filter==='all'?'All open projects':status(filter)}\n**Matching projects:** ${items.length}`);
+ const filters=['all','pending','not_started','in_progress','on_hold','awaiting_review','changes_requested'];
+ c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(new StringSelectMenuBuilder().setCustomId('msrpm:filter:0').setPlaceholder('Filter by status').addOptions(filters.map(x=>({label:x==='all'?'All Open Projects':status(x),value:x,default:x===filter})))));
+ if(items.length)c.addActionRowComponents(row(new StringSelectMenuBuilder().setCustomId('msrpm:pickmanage:0').setPlaceholder('Choose project').addOptions(items.slice(0,25).map(p=>({label:p.title.slice(0,90),value:p.id,description:`#${p.id} · ${status(p.status)}`.slice(0,100)})))));
+ if(items.length>25)section(c,'-# Showing the 25 most recently updated matching projects.');
+ return finish(c);
+}
+function picker(i,completed=false){
+ const arr=mineList(i,completed);
+ const c=base({banner:true});
+ section(c,completed?'## Completed Media Projects\nSelect a finished project to view its full record.':'## My Media Projects\nSelect a project to manage it or review its status.');
+ if(!arr.length) section(c,completed?'No completed projects yet.':'You have no current projects.');
+ else {
+   const opts=arr.slice(0,25).map(p=>({label:p.title.slice(0,90),value:p.id,description:(`#${p.id} · ${status(p.status)}`).slice(0,100)}));
+   const sel=new StringSelectMenuBuilder().setCustomId(`msrpm:${completed?'pickdone':'pickmine'}:0`).setPlaceholder(completed?'Choose a completed project':'Choose your project').addOptions(opts);
+   c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(sel));
+ }
+ if(arr.length>25)section(c,'-# Showing the 25 most recently updated projects.');
+ return finish(c);
+}
+async function componentReply(i,c,banner=false){return i.reply({...sendPayload(c,{banner}),flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral});}
+async function handleCommand(i){if(!i.isChatInputCommand()||i.commandName!==command.name)return false;if(!management(i)){await respond(i,'Foundership or Media management permission required.');return true;}await defer(i);try{const c=await channel(i,PROJECT_CHANNEL),s=load();let msg;if(s.dashboard?.messageId){try{const existing=await c.messages.fetch(s.dashboard.messageId);msg=await existing.edit(sendPayload(cards(i.guild),{banner:true}));}catch(e){if(![10008,10003].includes(e.code))throw e;}}if(!msg)msg=await c.send(sendPayload(cards(i.guild),{banner:true}));s.dashboard={messageId:msg.id,channelId:c.id};save(s);await i.editReply(`Media Project Manager ready: ${msg.url}`);}catch(e){await i.editReply(`Unable to post dashboard: ${e.message}`);}return true;}
+async function handleComponent(i){if(!i.customId?.startsWith('msrpm:'))return false;if(!i.guild){await respond(i,'Server only.');return true;}
+ const bits=i.customId.split(':'),action=bits[1],id=bits[2];
+ try{
+ if(i.isButton()&&action==='new'){if(!media(i))throw Error('Media Team role required.');await i.showModal(createModal());return true;}
+ if(i.isButton()&&action==='overview'){if(!management(i))throw Error('Management access required.');await componentReply(i,overviewPicker(i),false);return true;}
+ if(i.isStringSelectMenu()&&action==='filter'){if(!management(i))throw Error('Management access required.');await componentReply(i,overviewPicker(i,i.values[0]),false);return true;}
+ if(i.isButton()&&(action==='mine'||action==='completed')){if(!media(i))throw Error('Media Team role required.');await componentReply(i,picker(i,action==='completed'),true);return true;}
+ if(i.isStringSelectMenu()&&['pickmine','pickdone','pickmanage'].includes(action)){const p=load().projects[i.values[0]];if(!p||p.guildId!==i.guildId)throw Error('Project not found.');if(action==='pickmanage'&&!management(i))throw Error('Management access required.');if(action==='pickmine'&&p.assignee!==i.user.id&&!management(i))throw Error('This is not your project.');if(action==='pickdone'&&p.status!=='completed')throw Error('This is not a completed project.');await componentReply(i,action==='pickmanage'?approvalCard(p,i.guild):smallCard(p,i.guild),action==='pickmanage');return true;}
+ const p=load().projects[action==='form'&&id!=='new'?bits[3]:id];if(!(action==='form'&&id==='new')&&(!p||p.guildId!==i.guildId))throw Error('Project not found.');
+ if(i.isButton()){
+  if(['approve','deny','accept','revise','denywork','assign'].includes(action)&&!management(i))throw Error('Media management role required.');
+  if(['status','edit','submit'].includes(action)&&p.assignee!==i.user.id&&!management(i))throw Error('Only the assigned project member may make this change.');
+  if(['approve','deny'].includes(action)&&p.status!=='pending')throw Error('Project has already been reviewed.');
+  if(['accept','revise','denywork'].includes(action)&&p.status!=='awaiting_review')throw Error('No submission is awaiting review.');
+  if(['status','edit','submit','assign'].includes(action)&&['pending','denied','cancelled','completed','awaiting_review'].includes(p.status))throw Error('This project cannot be changed in its current status.');
+  if(['deny','revise','denywork'].includes(action)){await i.showModal(reasonModal(p,action));return true;}
+  if(action==='edit'){await i.showModal(createModal(p));return true;}
+  if(action==='submit'){await i.showModal(submissionModal(p));return true;}
+  if(action==='status'){await i.reply({content:'Choose the new project status:',components:[row(new StringSelectMenuBuilder().setCustomId(`msrpm:selectstatus:${id}`).setPlaceholder('Update status').addOptions([{label:'Not Started',value:'not_started'},{label:'In Progress',value:'in_progress'},{label:'On Hold',value:'on_hold'},{label:'Cancel Project',value:'cancelled'}]))],flags:MessageFlags.Ephemeral});return true;}
+  if(action==='assign'){await i.reply({content:'Choose a Media Team member to reassign this project to:',components:[row(new UserSelectMenuBuilder().setCustomId(`msrpm:selectuser:${id}`).setPlaceholder('Choose new owner').setMinValues(1).setMaxValues(1))],flags:MessageFlags.Ephemeral});return true;}
+ }
+ const key=i.guildId+':'+(id==='new'?'create:'+i.user.id:id);if(locks.has(key))throw Error('This project is being updated.');locks.add(key);
+ try{
+ if(i.isModalSubmit()&&action==='form'&&id==='new'){
+  if(!media(i))throw Error('Media Team role required.');await defer(i);const title=i.fields.getTextInputValue('title').trim(),description=i.fields.getTextInputValue('description').trim(),type=i.fields.getStringSelectValues('type')[0],deadline=dateCheck(i.fields.getTextInputValue('deadline').trim()),notes=i.fields.getTextInputValue('notes')?.trim()||'';
+  if(!title||!description||!TYPES.includes(type))throw Error('Project name, description and type are required.');const state=load(),seq=state.sequence+1,pid=String(seq).padStart(4,'0');const obj={id:pid,guildId:i.guildId,title,description,type,deadline,notes,creator:i.user.id,assignee:i.user.id,status:'pending',submission:null,feedback:'',createdAt:Date.now(),updatedAt:Date.now(),history:[]};log(obj,i.user.id,'Project created; approval requested');const c=await channel(i,APPROVAL_CHANNEL);const m=await c.send(sendPayload(approvalCard(obj,i.guild),{banner:true}));obj.approvalMessageId=m.id;state.sequence=seq;state.projects[pid]=obj;save(state);await i.editReply(`Project **#${pid}** submitted for approval. It is visible under **My Projects** but cannot be edited until approved. [View review log](${m.url})`);return true;
+ }
+ if(i.isButton()&&['approve','accept'].includes(action)){
+  await defer(i);const s=load(),r=s.projects[id],expected=action==='approve'?'pending':'awaiting_review';if(r.status!==expected)throw Error('Project status has already changed.');if(!management(i))throw Error('Management permission required.');if(action==='approve'){r.status='not_started';log(r,i.user.id,'Project approved');}else{r.status='completed';r.reviewedBy=i.user.id;r.completedAt=Date.now();log(r,i.user.id,'Finished work accepted');}save(s);await sync(i,r);await i.editReply(action==='approve'?`Project #${id} approved and assigned to <@${r.assignee}>.`:`Project #${id} marked complete; permanent completion log updated.`);return true;
+ }
+ if(i.isStringSelectMenu()&&action==='selectstatus'){
+  if(p.assignee!==i.user.id&&!management(i))throw Error('Not your project.');if(['pending','denied','cancelled','completed','awaiting_review'].includes(p.status))throw Error('Project locked.');const next=i.values[0];if(!['not_started','in_progress','on_hold','cancelled'].includes(next))throw Error('Unknown status.');await defer(i);const s=load(),r=s.projects[id];if(['pending','denied','cancelled','completed','awaiting_review'].includes(r.status))throw Error('Project locked.');r.status=next;log(r,i.user.id,'Status changed to '+next);save(s);await sync(i,r);await i.editReply(`Project #${id} changed to **${status(next)}**.`);return true;
+ }
+ if(i.isUserSelectMenu()&&action==='selectuser'){
+  if(!management(i))throw Error('Media management role required.');if(['pending','denied','cancelled','completed','awaiting_review'].includes(p.status))throw Error('Project locked.');const target=await i.guild.members.fetch(i.values[0]);if(!Object.values(ROLES).some(r=>target.roles.cache.has(r))&&!target.permissions.has('Administrator'))throw Error('Please select a Media Team member.');await defer(i);const s=load(),r=s.projects[id];r.assignee=target.id;log(r,i.user.id,'Reassigned to '+target.id);save(s);await sync(i,r);await i.editReply(`Project #${id} assigned to <@${target.id}>.`);return true;
+ }
+ if(i.isModalSubmit()&&action==='form'){
+  const op=id,pid=bits[3],s=load(),r=s.projects[pid];if(!r||r.guildId!==i.guildId)throw Error('Project no longer exists.');const owner=r.assignee===i.user.id;
+  if(['deny','revise','denywork'].includes(op)){
+   if(!management(i))throw Error('Management permission required.');if(op==='deny'&&r.status!=='pending')throw Error('Project already reviewed.');if(op!=='deny'&&r.status!=='awaiting_review')throw Error('Submission not pending.');const reason=i.fields.getTextInputValue('reason').trim();if(!reason)throw Error('A reason is required.');await defer(i);r.feedback=reason;r.status=op==='deny'||op==='denywork'?'denied':'changes_requested';log(r,i.user.id,`${op}: ${reason}`);save(s);await sync(i,r);await i.editReply(`Project #${pid} ${op==='revise'?'sent back for changes':'denied'}.`);return true;
   }
-}
-function save(data) {
-  fs.mkdirSync(path.dirname(DATA), {recursive:true});
-  const tmp = `${DATA}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, DATA);
-}
-function roles(i) { return i.member?.roles?.cache; }
-function isManagement(i) {
-  return Boolean(i.memberPermissions?.has('Administrator') ||
-    [FOUNDER,HEAD,SENIOR].some(id=>roles(i)?.has(id)));
-}
-function isMedia(i) { return isManagement(i) || [MEMBER,TRIAL].some(id=>roles(i)?.has(id)); }
-function icon(guild, name) {
-  const e = guild?.emojis?.cache?.find(x=>x.name===name && x.available!==false);
-  return e ? e.toString() : '';
-}
-function withIcon(guild, name, label) { const found=icon(guild,name);return found?`${found} ${label}`:label; }
-function txt(v, max=900) {
-  const s = String(v??'').trim().replace(/@/g,'@\u200b').replace(/<(?=[@!#&])/g,'<\u200b')
-    .replace(/([\\*_~`|])/g,'\\$1');
-  return s.length>max ? `${s.slice(0,max-1)}…` : (s||'—');
-}
-function validLink(v) { if(!v) return '';try{const x=new URL(v);return ['http:','https:'].includes(x.protocol)?x.href:'';}catch{return '';} }
-function images(banner) {
-  const result = [];
-  if (banner) result.push(new AttachmentBuilder(TOP, {name:'ticket-dashboard.png'}));
-  result.push(new AttachmentBuilder(BOTTOM, {name:'image.png'}));
-  return result;
-}
-function gallery(name) {
-  return new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${name}`));
-}
-function button(id,label,style=ButtonStyle.Secondary,disabled=false,emName=null,guild=null) {
-  const b=new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style).setDisabled(disabled);
-  if(emName) { const e=guild?.emojis?.cache?.find(x=>x.name===emName && x.available!==false); if(e) b.setEmoji({id:e.id,name:e.name,animated:Boolean(e.animated)}); }
-  return b;
-}
-function row(...components) { return new ActionRowBuilder().addComponents(...components); }
-function payload(components,{banner=false,extraFiles=[]}={}) {
-  return {flags:MessageFlags.IsComponentsV2,components,files:[...images(banner),...extraFiles],allowedMentions:{parse:[]}};
-}
-function statusText(s) {return ({pending:'Pending approval',denied:'Denied',not_started:'Not started',in_progress:'In progress',on_hold:'On hold',awaiting_review:'Awaiting review',changes_requested:'Changes requested',completed:'Completed',cancelled:'Cancelled',rejected:'Rejected'})[s]||s;}
-function details(t) {
-  return [
-    `**Type:** ${txt(t.type,80)}`,
-    `**Requested by:** <@${t.creatorId}>`,
-    `**Assigned to:** ${t.assigneeId?`<@${t.assigneeId}>`:'Not assigned'}`,
-    `**Status:** ${statusText(t.status)}`,
-    `**Deadline:** ${txt(t.deadline,70)}`
-  ].join('\n');
-}
-function baseContainer(header, body, {banner=false}={}) {
-  const c=new ContainerBuilder();
-  if(banner) c.addMediaGalleryComponents(gallery('ticket-dashboard.png')).addSeparatorComponents(new SeparatorBuilder());
-  c.addTextDisplayComponents(new TextDisplayBuilder().setContent(header))
-    .addSeparatorComponents(new SeparatorBuilder())
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(body));
-  return c;
-}
-function finishContainer(c) { return c.addSeparatorComponents(new SeparatorBuilder()).addMediaGalleryComponents(gallery('image.png')); }
-function dashboard(guild) {
-  const c = baseContainer(
-    `## ${withIcon(guild,'msrp_event_people','Media Management')}`,
-    'Submit media requests and ideas, then manage assigned work here. Requests are reviewed by Senior Media or Head of Media.\n\n-# Approved work is automatically assigned to its requester. Finished work must be reviewed before completion.',
-    {banner:true}
-  );
-  c.addSeparatorComponents(new SeparatorBuilder())
-    .addActionRowComponents(row(
-      button('msrp_media:create','New Request',ButtonStyle.Primary,false,'msrp_appeal',guild),
-      button('msrp_media:mine','My Tasks',ButtonStyle.Secondary,false,'msrp_information_v2',guild),
-      button('msrp_media:browse','Browse Tasks',ButtonStyle.Secondary,false,'msrp_ticket_rules',guild)
-    ));
-  return finishContainer(c);
-}
-function approvalCard(t,guild) {
-  const c=baseContainer(`## ${withIcon(guild,'msrp_notifications','Media Request')}  ·  #${t.id}`,
-    `**${txt(t.title,140)}**\n${details(t)}\n\n**Description**\n${txt(t.description,1600)}`,
-    {banner:true});
-  if(t.denialReason) c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Decision notes:** ${txt(t.denialReason,600)}`));
-  c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(
-    button(`msrp_media:approve:${t.id}`,'Approve',ButtonStyle.Success,t.status!=='pending'),
-    button(`msrp_media:deny:${t.id}`,'Deny',ButtonStyle.Danger,t.status!=='pending')
-  ));
-  return finishContainer(c);
-}
-function taskCard(t,guild) {
-  const c=baseContainer(`## ${withIcon(guild,'msrp_appeal',t.type)}  ·  #${t.id}`,
-    `**${txt(t.title,140)}**\n${details(t)}\n\n**Task**\n${txt(t.description,1400)}`,
-    {banner:false});
-  if(t.notes) c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Notes / Progress**\n${txt(t.notes,900)}`));
-  if(t.reviewNotes) c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Management feedback**\n${txt(t.reviewNotes,900)}`));
-  if(t.submission) {
-    const parts = [];
-    if(t.submission.link) parts.push(`**Work link:** ${t.submission.link}`);
-    if(t.submission.notes) parts.push(`**Submission notes:** ${txt(t.submission.notes,500)}`);
-    if(t.submission.files?.length) parts.push(`**Attachments:** ${t.submission.files.map(f=>`[${txt(f.name,45)}](${f.url})`).join(' · ')}`);
-    if(parts.length) c.addTextDisplayComponents(new TextDisplayBuilder().setContent(parts.join('\n')));
+  if(!owner&&!management(i))throw Error('This project is not assigned to you.');if(['pending','denied','cancelled','completed','awaiting_review'].includes(r.status))throw Error('Project locked.');
+  if(op==='edit'){
+   const title=i.fields.getTextInputValue('title').trim(),description=i.fields.getTextInputValue('description').trim(),type=i.fields.getStringSelectValues('type')[0],deadline=dateCheck(i.fields.getTextInputValue('deadline').trim()),notes=i.fields.getTextInputValue('notes')?.trim()||'';if(!title||!description||!TYPES.includes(type))throw Error('Missing project information.');await defer(i);Object.assign(r,{title,description,type,deadline,notes});log(r,i.user.id,'Project details edited');save(s);await sync(i,r);await i.editReply(`Project #${pid} details updated.`);return true;
   }
-  const ended=['completed','cancelled','rejected'].includes(t.status);
-  c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(
-    button(`msrp_media:status:${t.id}`,'Update Status',ButtonStyle.Secondary,ended),
-    button(`msrp_media:edit:${t.id}`,'Edit Details',ButtonStyle.Secondary,ended),
-    button(`msrp_media:submit:${t.id}`,'Submit Work',ButtonStyle.Primary,ended||t.status==='awaiting_review'),
-    button(`msrp_media:assign:${t.id}`,'Reassign',ButtonStyle.Secondary,ended),
-    button(`msrp_media:cancel:${t.id}`,'Cancel',ButtonStyle.Danger,ended)
-  ));
-  return finishContainer(c);
-}
-function reviewCard(t,guild) {
-  const c=baseContainer(`## ${withIcon(guild,'msrp_information_v2','Review Finished Work')}  ·  #${t.id}`,
-    `**${txt(t.title,140)}**\n**Type:** ${txt(t.type,80)}\n**Submitted by:** <@${t.assigneeId}>\n**Task status:** ${statusText(t.status)}`,
-    {banner:false});
-  if(t.submission) {
-    const line=[t.submission.link?`**Work link:** ${t.submission.link}`:null,
-      t.submission.notes?`**Notes:** ${txt(t.submission.notes,800)}`:null,
-      t.submission.files?.length?`**Files:** ${t.submission.files.map(f=>`[${txt(f.name,40)}](${f.url})`).join(' · ')}`:null].filter(Boolean);
-    c.addSeparatorComponents(new SeparatorBuilder()).addTextDisplayComponents(new TextDisplayBuilder().setContent(line.join('\n') || 'Files attached.'));
+  if(op==='submit'){
+   const raw=i.fields.getTextInputValue('link')?.trim()||'',url=link(raw),note=i.fields.getTextInputValue('notes')?.trim()||'',up=Array.from(i.fields.getUploadedFiles('uploads',false)?.values()||[]);if(!url&&!up.length)throw Error('Please provide a finished-work link or attachment.');await defer(i);
+   // Mirror uploaded files into the permanent approval log before storing their URLs.
+   const c=await channel(i,APPROVAL_CHANNEL);const uploaded=[];if(up.length){const names=up.map((a,j)=>`msrpm-${pid}-${j+1}-${String(a.name).replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,60)}`);const attachmentMessage=await c.send({content:`Project #${pid} — submission attachments`,files:up.map((f,j)=>({attachment:f.url,name:names[j]})),allowedMentions:{parse:[]}});for(const f of attachmentMessage.attachments.values())uploaded.push({name:f.name,url:f.url});}
+   r.submission={link:url,notes:note,files:uploaded,submittedBy:i.user.id,submittedAt:Date.now()};r.status='awaiting_review';log(r,i.user.id,'Submitted completed work for review');save(s);await sync(i,r);await i.editReply(`Project #${pid} submitted for management review.`);return true;
   }
-  c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(
-    button(`msrp_media:accept:${t.id}`,'Accept Work',ButtonStyle.Success,t.status!=='awaiting_review'),
-    button(`msrp_media:revise:${t.id}`,'Return Draft',ButtonStyle.Secondary,t.status!=='awaiting_review'),
-    button(`msrp_media:reject:${t.id}`,'Deny Work',ButtonStyle.Danger,t.status!=='awaiting_review')
-  ));
-  return finishContainer(c);
-}
-function labelText(name,id,style=TextInputStyle.Short,{required=true,value='',max=1000}={}) {
-  const input = new TextInputBuilder().setCustomId(id).setStyle(style).setRequired(required).setMaxLength(max);
-  if(value) input.setValue(String(value).slice(0,max));
-  return new LabelBuilder().setLabel(name).setTextInputComponent(input);
-}
-function createModal() {
-  return new ModalBuilder().setCustomId('msrp_media:form:create').setTitle('Create Media Request').addLabelComponents(
-    new LabelBuilder().setLabel('Request type').setStringSelectMenuComponent(
-      new StringSelectMenuBuilder().setCustomId('type').setRequired(true).addOptions(
-        {label:'Editing',value:'Editing'},{label:'Thumbnail',value:'Thumbnail'},
-        {label:'Script',value:'Script'},{label:'Idea / Suggestion',value:'Idea / Suggestion'})),
-    labelText('Task title','title',TextInputStyle.Short,{max:120}),
-    labelText('What needs to be done?','description',TextInputStyle.Paragraph,{max:1600}),
-    labelText('Deadline (optional)','deadline',TextInputStyle.Short,{required:false,max:80})
-  );
-}
-function editModal(t) {
-  return new ModalBuilder().setCustomId(`msrp_media:form:edit:${t.id}`).setTitle('Edit Media Task').addLabelComponents(
-    labelText('Task title','title',TextInputStyle.Short,{value:t.title,max:120}),
-    labelText('Task description','description',TextInputStyle.Paragraph,{value:t.description,max:1600}),
-    labelText('Deadline (optional)','deadline',TextInputStyle.Short,{required:false,value:t.deadline,max:80}),
-    labelText('Notes / progress','notes',TextInputStyle.Paragraph,{required:false,value:t.notes,max:900})
-  );
-}
-function submitModal(t) {
-  return new ModalBuilder().setCustomId(`msrp_media:form:submit:${t.id}`).setTitle('Submit Finished Work').addLabelComponents(
-    labelText('Finished work URL (if any)','link',TextInputStyle.Short,{required:false,max:900}),
-    labelText('Notes for management','notes',TextInputStyle.Paragraph,{required:false,max:800}),
-    new LabelBuilder().setLabel('Finished files (optional)').setFileUploadComponent(
-      new FileUploadBuilder().setCustomId('uploads').setRequired(false).setMinValues(0).setMaxValues(3))
-  );
-}
-function reasonModal(id,action) {
-  return new ModalBuilder().setCustomId(`msrp_media:form:${action}:${id}`).setTitle(action==='revise'?'Return Draft':action==='reject'?'Deny Finished Work':'Deny Request').addLabelComponents(
-    labelText('Reason / feedback','reason',TextInputStyle.Paragraph,{required:true,max:800})
-  );
-}
-function isAssignee(i,t) { return t.assigneeId===i.user.id; }
-function allowedToEdit(i,t) {return isManagement(i) || isAssignee(i,t);}
-function channelId(state,kind,i) { return state.config[kind] || state.config.dashboardChannelId || i.channelId; }
-async function sendTo(i,id,components,opt={}) {
-  const ch=await i.guild.channels.fetch(id);
-  if(!ch || typeof ch.send!=='function') throw new Error('Configured channel is missing or not writable.');
-  return ch.send(payload(components,opt));
-}
-async function refresh(i,t,kind) {
-  const mid = t[`${kind}MessageId`], cid=t[`${kind}ChannelId`];
-  if(!mid || !cid) return;
-  const ch=await i.guild.channels.fetch(cid); const msg=await ch.messages.fetch(mid);
-  const card=kind==='approval'?approvalCard(t,i.guild):kind==='review'?reviewCard(t,i.guild):taskCard(t,i.guild);
-  const kept = kind==='review'
-    ? Array.from(msg.attachments.values()).filter(a=>a.name?.startsWith('media-')).map(a=>({id:a.id}))
-    : [];
-  const fileViews = kind==='review'
-    ? Array.from(msg.attachments.values()).filter(a=>a.name?.startsWith('media-')).map(a=>new FileBuilder().setURL(`attachment://${a.name}`))
-    : [];
-  await msg.edit({...payload([card,...fileViews],{banner:kind==='approval'}),...(kind==='review'?{attachments:kept}:{})});
-}
-async function tryRefresh(i,t,kind) {
-  try{ await refresh(i,t,kind); }catch(e){ console.error(`[MEDIA] Could not refresh ${kind}:`,e.message); }
-}
-async function ephemeral(i,content,components) {
-  const opts = {content,flags:MessageFlags.Ephemeral};
-  if(components) opts.components=components;
-  if(i.deferred||i.replied) return i.editReply({content, ...(components?{components}:{})});
-  return i.reply(opts);
-}
-function itemLink(t) {
-  return t.taskMessageId?`https://discord.com/channels/${t.guildId}/${t.taskChannelId}/${t.taskMessageId}`:null;
-}
-function listTasks(i,mine) {
-  const all=Object.values(load().tasks).filter(t=>t.guildId===i.guildId && (mine?(t.creatorId===i.user.id||t.assigneeId===i.user.id):t.status!=='denied'))
-    .sort((a,b)=>b.createdAt-a.createdAt).slice(0,15);
-  if(!all.length) return 'No tasks found yet.';
-  return all.map(t=>`**#${t.id} · ${txt(t.title,60)}** — ${statusText(t.status)}${itemLink(t)?` · [Open task](${itemLink(t)})`:''}`).join('\n');
-}
-
-async function handleCommand(i) {
-  if(!i.isChatInputCommand() || i.commandName!=='send-media-dashboard') return false;
-  await i.deferReply({flags:MessageFlags.Ephemeral});
-  try {
-    if(!isManagement(i)) throw new Error('Head of Media or Senior Media required.');
-    const state=load(), approvals=i.options.getChannel('approvals-channel'),tasks=i.options.getChannel('tasks-channel');
-    const channel=i.channel;
-    if(!channel || typeof channel.send!=='function') throw new Error('Use this command in a text channel.');
-    const nextConfig={
-      dashboardChannelId:i.channelId,
-      approvals:approvals?.id || state.config.approvals || i.channelId,
-      tasks:tasks?.id || state.config.tasks || i.channelId
-    };
-    let posted;
-    if(state.dashboard?.channelId===i.channelId && state.dashboard?.messageId) {
-      try {
-        const original=await channel.messages.fetch(state.dashboard.messageId);
-        await original.edit(payload([dashboard(i.guild)],{banner:true}));
-        posted=original;
-      }catch(e){ if(e.code!==10008 && e.code!==10003) throw e; }
-    }
-    if(!posted) posted=await channel.send(payload([dashboard(i.guild)],{banner:true}));
-    state.dashboard={channelId:i.channelId,messageId:posted.id};state.config=nextConfig;save(state);
-    await i.editReply(`Media Dashboard ready: ${posted.url}\nApprovals: <#${nextConfig.approvals}> · Tasks: <#${nextConfig.tasks}>`);
-  } catch(e) {await i.editReply(`Unable to send Media Dashboard: ${e.message}`).catch(()=>{});}
-  return true;
-}
-async function handleComponent(i) {
-  if(!i.customId?.startsWith('msrp_media:')) return false;
-  if(!i.guild) {await ephemeral(i,'Media Dashboard only works in the server.');return true;}
-  if(i.isButton() && i.customId==='msrp_media:create') {
-    if(!isMedia(i)) await ephemeral(i,'Media Team role required.');
-    else await i.showModal(createModal());
-    return true;
-  }
-  if(i.isButton() && ['msrp_media:mine','msrp_media:browse'].includes(i.customId)) {
-    if(!isMedia(i)) await ephemeral(i,'Media Team role required.');
-    else await ephemeral(i,`**${i.customId.endsWith('mine')?'My Tasks':'Media Tasks'}**\n${listTasks(i,i.customId.endsWith('mine'))}`);
-    return true;
-  }
-  const [prefix,action,id,modalTaskId] = i.customId.split(':');
-  if(prefix!=='msrp_media' || !id) return false;
-  const lookupId = action==='form' && id!=='create' ? modalTaskId : id;
-  const state=load(), t=(action==='form' && id==='create') ? {guildId:i.guildId,creatorId:i.user.id} : state.tasks[lookupId];
-  if(!t || t.guildId!==i.guildId) {await ephemeral(i,'Task not found.');return true;}
-  if(i.isButton() && ['approve','deny','accept','revise','reject','cancel','assign','edit','submit','status'].includes(action)) {
-    const mgmt=['approve','deny','accept','revise','reject','cancel','assign'].includes(action);
-    if(mgmt&&!isManagement(i)) {await ephemeral(i,'Only Senior Media / Head of Media can do this.');return true;}
-    if(!mgmt&&!allowedToEdit(i,t)) {await ephemeral(i,'This task is not assigned to you.');return true;}
-    if(['approve','deny'].includes(action) && t.status!=='pending') {await ephemeral(i,'This request was already reviewed.');return true;}
-    if(['accept','revise','reject'].includes(action) && t.status!=='awaiting_review') {await ephemeral(i,'This work is not currently awaiting review.');return true;}
-    if(['edit','submit','status','assign','cancel'].includes(action) && ['completed','cancelled','denied','rejected','pending','awaiting_review'].includes(t.status)) {await ephemeral(i,'This task cannot be changed in its current state.');return true;}
-    if(['deny','revise','reject'].includes(action)) {await i.showModal(reasonModal(id,action));return true;}
-    if(action==='edit') {await i.showModal(editModal(t));return true;}
-    if(action==='submit') {if(t.status==='awaiting_review') {await ephemeral(i,'This submission is already awaiting review.');return true;} await i.showModal(submitModal(t));return true;}
-    if(action==='status') {
-      await ephemeral(i,'Choose the task status:',[row(new StringSelectMenuBuilder().setCustomId(`msrp_media:selectstatus:${id}`).setPlaceholder('Update task status').addOptions(
-        {label:'In Progress',value:'in_progress'},{label:'On Hold',value:'on_hold'},{label:'Not Started',value:'not_started'}))]);
-      return true;
-    }
-    if(action==='assign') {
-      await ephemeral(i,'Choose the new assigned Media Team member:',[row(new UserSelectMenuBuilder().setCustomId(`msrp_media:selectuser:${id}`).setPlaceholder('Choose a member').setMinValues(1).setMaxValues(1))]);
-      return true;
-    }
-  }
-  const key=`${i.guildId}:${lookupId}`;
-  if(locks.has(key)) {await ephemeral(i,'This task is already being updated.');return true;}
-  locks.add(key);
-  try {
-    if(i.isButton() && action==='approve') {
-      await i.deferReply({flags:MessageFlags.Ephemeral});
-      const st=load(),r=st.tasks[id];if(r.status!=='pending') throw new Error('Request already processed.');
-      r.status='not_started';r.assigneeId=r.creatorId;r.updatedAt=Date.now();
-      const posted=await sendTo(i,channelId(st,'tasks',i),[taskCard(r,i.guild)]);
-      r.taskChannelId=posted.channelId;r.taskMessageId=posted.id;save(st);
-      await tryRefresh(i,r,'approval');await i.editReply(`Approved and assigned to <@${r.creatorId}>. [View task](${posted.url})`);
-      return true;
-    }
-    if(i.isButton() && action==='accept') {
-      await i.deferReply({flags:MessageFlags.Ephemeral});
-      const st=load(),r=st.tasks[id];if(r.status!=='awaiting_review') throw new Error('Not awaiting review.');
-      r.status='completed';r.updatedAt=Date.now();r.reviewedBy=i.user.id;save(st);
-      await Promise.all([tryRefresh(i,r,'task'),tryRefresh(i,r,'review')]);
-      await i.editReply(`Task #${id} marked **Completed**.`);
-      return true;
-    }
-    if(i.isButton() && action==='cancel') {
-      await i.deferReply({flags:MessageFlags.Ephemeral});
-      const st=load(),r=st.tasks[id];if(['completed','cancelled','denied','rejected'].includes(r.status)) throw new Error('Already finalised.');
-      r.status='cancelled';r.updatedAt=Date.now();save(st);
-      await Promise.all([tryRefresh(i,r,'task'),tryRefresh(i,r,'review')]);
-      await i.editReply(`Task #${id} cancelled.`);
-      return true;
-    }
-    if(i.isStringSelectMenu() && action==='selectstatus') {
-      if(!allowedToEdit(i,t)) throw new Error('Not your task.');
-      if(['pending','denied','completed','cancelled','rejected','awaiting_review'].includes(t.status)) throw new Error('This task cannot change status now.');
-      const chosen=i.values[0];if(!['not_started','in_progress','on_hold'].includes(chosen)) throw new Error('Invalid status.');
-      await i.deferReply({flags:MessageFlags.Ephemeral});
-      const st=load();st.tasks[id].status=chosen;st.tasks[id].updatedAt=Date.now();save(st);
-      await tryRefresh(i,st.tasks[id],'task');await i.editReply(`Updated to **${statusText(chosen)}**.`);return true;
-    }
-    if(i.isUserSelectMenu() && action==='selectuser') {
-      if(!isManagement(i)) throw new Error('Management permission required.');
-      if(['pending','denied','completed','cancelled','rejected','awaiting_review'].includes(t.status)) throw new Error('Task is no longer assignable.');
-      const target=await i.guild.members.fetch(i.values[0]);
-      if(![HEAD,SENIOR,MEMBER,TRIAL].some(x=>target.roles.cache.has(x))) throw new Error('Select a member of the Media Team.');
-      await i.deferReply({flags:MessageFlags.Ephemeral});
-      const st=load();st.tasks[id].assigneeId=target.id;st.tasks[id].updatedAt=Date.now();save(st);
-      await tryRefresh(i,st.tasks[id],'task');await i.editReply(`Task #${id} assigned to <@${target.id}>.`);return true;
-    }
-    if(i.isModalSubmit() && action==='form') {
-      const operation=id;
-      const taskId=modalTaskId;
-      // Modals have their own action name and task ID.
-      if(operation==='create') {
-        if(!isMedia(i)) throw new Error('Media Team role required.');
-        await i.deferReply({flags:MessageFlags.Ephemeral});
-        const st=load();const kind=i.fields.getStringSelectValues('type')?.[0];
-        if(!['Editing','Thumbnail','Script','Idea / Suggestion'].includes(kind)) throw new Error('Invalid media request type.');
-        const title=i.fields.getTextInputValue('title').trim();
-        const description=i.fields.getTextInputValue('description').trim();
-        if(!title||!description) throw new Error('A title and description are required.');
-        const num=st.seq+1, keyId=String(num).padStart(4,'0');
-        const r={id:keyId,guildId:i.guildId,type:kind,title,description,deadline:i.fields.getTextInputValue('deadline')?.trim()||'',
-          creatorId:i.user.id,assigneeId:null,status:'pending',notes:'',reviewNotes:'',submission:null,createdAt:Date.now(),updatedAt:Date.now()};
-        const posted=await sendTo(i,channelId(st,'approvals',i),[approvalCard(r,i.guild)],{banner:true});
-        r.approvalChannelId=posted.channelId;r.approvalMessageId=posted.id;st.seq=num;st.tasks[keyId]=r;save(st);
-        await i.editReply(`Request #${keyId} submitted to management. [View request](${posted.url})`);return true;
-      }
-      const st=load(),r=st.tasks[taskId];
-      if(!r || r.guildId!==i.guildId) throw new Error('Task no longer exists.');
-      if(['deny','revise','reject'].includes(operation)) {
-        if(!isManagement(i)) throw new Error('Management permission required.');
-        if(operation==='deny'&&r.status!=='pending') throw new Error('Request already reviewed.');
-        if(['revise','reject'].includes(operation)&&r.status!=='awaiting_review') throw new Error('Not awaiting review.');
-        await i.deferReply({flags:MessageFlags.Ephemeral});
-        const reason=i.fields.getTextInputValue('reason').trim();
-        if(!reason) throw new Error('Feedback required.');
-        if(operation==='deny') {r.status='denied';r.denialReason=reason;}
-        else {r.status=operation==='reject'?'rejected':'changes_requested';r.reviewNotes=reason;}
-        r.updatedAt=Date.now();save(st);
-        await Promise.all([tryRefresh(i,r,'approval'),tryRefresh(i,r,'task'),tryRefresh(i,r,'review')]);
-        await i.editReply(operation==='deny'?`Request #${r.id} denied.`:operation==='reject'?`Finished work for task #${r.id} denied.`:`Task #${r.id} returned to its assignee for changes.`);return true;
-      }
-      if(!allowedToEdit(i,r)) throw new Error('This task is not assigned to you.');
-      if(['pending','denied','completed','cancelled','rejected','awaiting_review'].includes(r.status)) throw new Error('Task is finalised, pending approval, or awaiting review.');
-      if(operation==='edit') {
-        await i.deferReply({flags:MessageFlags.Ephemeral});
-        r.title=i.fields.getTextInputValue('title').trim();r.description=i.fields.getTextInputValue('description').trim();
-        r.deadline=i.fields.getTextInputValue('deadline')?.trim()||'';r.notes=i.fields.getTextInputValue('notes')?.trim()||'';
-        if(!r.title||!r.description) throw new Error('Title and description cannot be blank.');
-        r.updatedAt=Date.now();save(st);await tryRefresh(i,r,'task');
-        await i.editReply(`Task #${r.id} details updated.`);return true;
-      }
-      if(operation==='submit') {
-        if(r.status==='awaiting_review') throw new Error('Work already awaiting review.');
-        await i.deferReply({flags:MessageFlags.Ephemeral});
-        const raw=i.fields.getTextInputValue('link')?.trim()||'';
-        const link=validLink(raw);
-        if(raw && !link) throw new Error('Work link must start with https:// or http://.');
-        const note=i.fields.getTextInputValue('notes')?.trim()||'';
-        const uploads=Array.from(i.fields.getUploadedFiles('uploads',false)?.values()||[]);
-        if(!link && uploads.length===0) throw new Error('Add a link or at least one file before submitting.');
-        // The earlier review message must never approve a newer submission.
-        if(r.reviewMessageId) await tryRefresh(i,{...r,status:'superseded'},'review');
-        r.status='awaiting_review';r.updatedAt=Date.now();
-        r.submission={link,notes:note,files:uploads.map((f,j)=>({name:f.name,url:f.url,index:j}))};
-        const safeUploads=uploads.map((f,j)=>({attachment:f.url,name:`media-${r.id}-${j+1}-${String(f.name).replace(/[^A-Za-z0-9._-]/g,'_').slice(0,65)}`}));
-        // Reupload files into the review channel to preserve them beyond the modal.
-        const c=reviewCard(r,i.guild);
-        const sent=await sendTo(i,channelId(st,'approvals',i),[c,...safeUploads.map(f=>new FileBuilder().setURL(`attachment://${f.name}`))],{extraFiles:safeUploads});
-        r.submission.files=Array.from(sent.attachments.values()).filter(f=>safeUploads.some(x=>x.name===f.name)).map(f=>({name:f.name,url:f.url}));
-        r.reviewChannelId=sent.channelId;r.reviewMessageId=sent.id;save(st);
-        await tryRefresh(i,r,'task');await tryRefresh(i,r,'review');
-        await i.editReply(`Task #${r.id} submitted for management review. [View submission](${sent.url})`);return true;
-      }
-    }
-    await ephemeral(i,'This media action is not available.');
-  } catch(e) {
-    console.error('[MEDIA] Action failed:',e);
-    await ephemeral(i,`Unable to update task: ${String(e.message||e).slice(0,300)}`).catch(()=>{});
-  } finally{locks.delete(key);}
-  return true;
+ }
+ await respond(i,'This action is no longer available.');return true;
+ }finally{locks.delete(key);}
+ }catch(e){console.error('[MEDIA PROJECTS] Interaction error:',e);await respond(i,`Unable to update project: ${String(e.message||e).slice(0,300)}`).catch(()=>{});return true;}
 }
 module.exports={command,handleCommand,handleComponent};
