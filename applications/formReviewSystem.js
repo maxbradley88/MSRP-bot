@@ -60,12 +60,12 @@ function getForms() {
 }
 function saveForms(forms) { writeJson(FORMS_FILE, forms); }
 function updateLegacyFormLink(key, link) {
-  const name=key==='gameStaff'?'Game Staff':key==='supportTeam'?'Support Staff':null;
+  const name=key==='gameStaff'?'Game Staff':key==='supportTeam'?'Support Staff':key==='mediaStaff'?'Media Staff':null;
   if (!name) return;
   const forms=getForms();
   const f=findForm(name,forms);
   if (f) f.link=link||null;
-  else forms.push({name,link:link||null,roleId:key==='gameStaff'?GAME_STAFF_ROLE_ID:SUPPORT_STAFF_ROLE_ID});
+  else forms.push({name,link:link||null,roleId:key==='gameStaff'?GAME_STAFF_ROLE_ID:key==='supportTeam'?SUPPORT_STAFF_ROLE_ID:null});
   saveForms(forms);
 }
 function findForm(name, forms = getForms()) {

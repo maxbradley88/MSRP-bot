@@ -1,6 +1,9 @@
 const { PermissionFlagsBits } = require('discord.js');
 
-const ANNOUNCEMENTS_CHANNEL_ID = '1547544817641455626';
+const ANNOUNCEMENTS_CHANNEL_IDS = new Set([
+    '1547544817641455626', // Main announcements
+    '1555455731157700628'  // Media notices
+]);
 
 /**
  * Reposts member messages in the announcements channel through the bot.
@@ -13,7 +16,7 @@ module.exports = function registerAnnouncementRelay(client) {
                 return;
             }
 
-            if (message.channelId !== ANNOUNCEMENTS_CHANNEL_ID) {
+            if (!ANNOUNCEMENTS_CHANNEL_IDS.has(message.channelId)) {
                 return;
             }
 

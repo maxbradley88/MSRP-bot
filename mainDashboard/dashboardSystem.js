@@ -163,7 +163,8 @@ const commands = [
             .setRequired(true)
             .addChoices(
                 { name: 'Game Staff', value: 'gameStaff' },
-                { name: 'Support Team', value: 'supportTeam' }
+                { name: 'Support Team', value: 'supportTeam' },
+                { name: 'Media Staff', value: 'mediaStaff' }
             ))
         .addStringOption(option => option
             .setName('application-link')
@@ -529,7 +530,7 @@ async function executeCommand(interaction) {
         saveData(data);
         updateLegacyFormLink(application, data.applications[application]);
 
-        const label = application === 'gameStaff' ? 'Game Staff' : 'Support Team';
+        const label = application === 'gameStaff' ? 'Game Staff' : application === 'mediaStaff' ? 'Media Staff' : 'Support Team';
         await interaction.reply({
             content: rawLink ? `✅ **${label}** application link updated.` : `✅ **${label}** application button disabled.`,
             flags: MessageFlags.Ephemeral
@@ -846,7 +847,14 @@ function applicationButton(label, link) {
 }
 
 async function showApplications(interaction) {
-    const forms = getForms().filter(form => form.link);
+    // Keep Media Staff visible as a disabled placeholder until a link is set.
+    // Put it immediately after Support Staff even if the registered form order changes.
+    const registered = getForms();
+    const forms = registered.filter(form => form.link && form.name.toLowerCase() !== 'media staff');
+    const mediaForm = registered.find(form => form.name.toLowerCase() === 'media staff')
+        || { name: 'Media Staff', link: null, roleId: null };
+    const supportIndex = forms.findIndex(form => form.name.toLowerCase() === 'support staff');
+    forms.splice(supportIndex >= 0 ? supportIndex + 1 : forms.length, 0, mediaForm);
     const container = new ContainerBuilder()
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(
             '## Apply at MSRP today!\n\n' +
