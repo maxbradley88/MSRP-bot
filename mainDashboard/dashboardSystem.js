@@ -847,14 +847,27 @@ function applicationButton(label, link) {
 }
 
 async function showApplications(interaction) {
-    // Keep Media Staff visible as a disabled placeholder until a link is set.
-    // Put it immediately after Support Staff even if the registered form order changes.
+    // Always show each core application in a stable order, even without a link.
+    // An unconfigured link disables ONLY that application's button.
     const registered = getForms();
-    const forms = registered.filter(form => form.link && form.name.toLowerCase() !== 'media staff');
-    const mediaForm = registered.find(form => form.name.toLowerCase() === 'media staff')
-        || { name: 'Media Staff', link: null, roleId: null };
-    const supportIndex = forms.findIndex(form => form.name.toLowerCase() === 'support staff');
-    forms.splice(supportIndex >= 0 ? supportIndex + 1 : forms.length, 0, mediaForm);
+    const byName = new Map(registered.map(f => [f.name.trim().toLowerCase(), f]));
+    const dashboardLinks = loadData().applications || {};
+    const base = [
+        { name: 'Game Staff', legacyKey: 'gameStaff' },
+        { name: 'Support Staff', legacyKey: 'supportTeam' },
+        { name: 'Media Staff', legacyKey: 'mediaStaff' }
+    ];
+    const forms = base.map(({ name, legacyKey }) => {
+        const registeredForm = byName.get(name.toLowerCase())
+            || (name === 'Support Staff' ? byName.get('support team') : null);
+        return {name, link: registeredForm ? (registeredForm.link || null) : (dashboardLinks[legacyKey] || null)};
+    });
+    for (const form of registered) {
+        if (!base.some(b => b.name.toLowerCase() === form.name.trim().toLowerCase())
+            && form.name.trim().toLowerCase() !== 'support team') {
+            forms.push(form);
+        }
+    }
     const container = new ContainerBuilder()
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(
             '## Apply at MSRP today!\n\n' +

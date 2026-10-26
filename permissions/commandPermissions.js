@@ -29,6 +29,7 @@ const commandPermissions = {
     'partnership-remove': [FOUNDERSHIP_ROLE_ID],
     'application-manage': [FOUNDERSHIP_ROLE_ID],
     'form-manage': [FOUNDERSHIP_ROLE_ID],
+    'send-media-dashboard': [FOUNDERSHIP_ROLE_ID, '1550808851538780160', '1564210385903419503'],
     'coc-team-add': [FOUNDERSHIP_ROLE_ID],
     'coc-team-remove': [FOUNDERSHIP_ROLE_ID],
 

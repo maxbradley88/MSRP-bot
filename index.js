@@ -102,6 +102,7 @@ const {
 } = require('./welcome/welcomeMessage');
 
 const mainDashboard = require('./mainDashboard/dashboardSystem');
+const mediaSystem = require('./media/mediaSystem');
 const eventSystem = require('./events/eventSystem');
 const giveawaySystem = require('./giveaways/giveawaySystem');
 const infractionSystem = require('./infractions/infractionSystem');
@@ -1401,6 +1402,7 @@ client.once(
     sessionShutdownCommand.forceData.toJSON(),
     reactionRole.command.toJSON(),
     ...mainDashboard.commands.map(command => command.toJSON()),
+    mediaSystem.command.toJSON(),
     ...eventSystem.commands.map(command => command.toJSON()),
     giveawaySystem.command.toJSON(),
     ...infractionSystem.commands.map(command => command.toJSON()),
@@ -1523,6 +1525,7 @@ client.on(
             if (interaction.isAutocomplete() && await staffDashboard.handleAutocomplete(interaction)) return;
             if (await formReviewSystem.handleAutocomplete(interaction)) return;
             if (await formReviewSystem.handleComponent(interaction)) return;
+            if (await mediaSystem.handleComponent(interaction)) return;
             if (await staffDashboard.handleComponent(interaction)) return;
             if (await trainingSystem.handleComponent(interaction)) return;
             if (interaction.isAutocomplete() && await infractionSystem.handleAutocomplete(interaction)) return;
@@ -1581,6 +1584,7 @@ if (
 
     if (await trainingSystem.handleCommand(interaction)) return;
     if (await formReviewSystem.handleCommand(interaction)) return;
+    if (await mediaSystem.handleCommand(interaction)) return;
 
     if (await giveawaySystem.commandHandler(interaction)) return;
 
