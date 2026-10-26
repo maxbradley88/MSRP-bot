@@ -35,7 +35,24 @@ function finish(c){return c.addSeparatorComponents(new SeparatorBuilder()).addMe
 function section(c,t){c.addTextDisplayComponents(new TextDisplayBuilder().setContent(t));return c;}
 function files(banner=false){return [...(banner?[new AttachmentBuilder(BANNER,{name:'ticket-dashboard.png'})]:[]),new AttachmentBuilder(FOOTER,{name:'image.png'})];}
 function sendPayload(c,{banner=false,roleIds=[]}={}){return {components:[c],files:files(banner),flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[],users:[],roles:roleIds}};}
-function cards(g){const c=base({banner:true});section(c,`## ${icon(g,'msrp_appeal')}Media Project Manager\nCreate projects, track your progress and submit completed work for approval.`);c.addSeparatorComponents(new SeparatorBuilder());c.addActionRowComponents(buttonRow(btn('msrpm:new','New Project',ButtonStyle.Primary),btn('msrpm:mine','My Projects'),btn('msrpm:completed','Completed Projects'),btn('msrpm:overview','Management Overview')));return finish(c);}
+function cards(g){
+ const c=base({banner:true});
+ section(c,`## ${icon(g,'msrp_appeal')}Media Project Manager\nThis dashboard is where the Media Team can log the projects they are working on, track their progress and manage their submissions.`);
+ c.addSeparatorComponents(new SeparatorBuilder());
+ c.addActionRowComponents(buttonRow(
+  btn('msrpm:active','View Active Projects',ButtonStyle.Secondary),
+  btn('msrpm:mine','View My Tasks',ButtonStyle.Secondary)
+ ));
+ c.addActionRowComponents(row(new StringSelectMenuBuilder()
+  .setCustomId('msrpm:dashboard:actions')
+  .setPlaceholder('Project Actions')
+  .addOptions([
+   {label:'Start a New Project',value:'new',description:'Create a project for management approval'},
+   {label:'View Completed Projects',value:'completed',description:'View finished projects and their evidence'},
+   {label:'Management Overview',value:'overview',description:'Filter projects by status (management only)'}
+  ])));
+ return finish(c);
+}
 function projectText(p){return [`**Project:** ${safe(p.title,120)}`,`**Type:** ${safe(p.type,60)}`,`**Created by:** <@${p.creator}>`,`**Assigned to:** <@${p.assignee}>`,`**Status:** ${status(p.status)}`,`**Submission date:** ${safe(p.deadline,30)}`,``,`**Description**`,safe(p.description,1400),...(p.notes?[``,`**Project Notes**`,safe(p.notes,650)]:[])].join('\n');}
 function evidenceText(p){const s=p.submission;if(!s)return '';const pieces=[];if(s.link)pieces.push(`**Submission link:** ${safe(s.link,850)}`);if(s.files?.length)pieces.push(`**Attachments:** ${s.files.map(f=>`[${safe(f.name,60)}](${f.url})`).join(' · ')}`);if(s.notes)pieces.push(`**Submission notes:** ${safe(s.notes,900)}`);return pieces.join('\n\n');}
 function approvalCard(p,g){const c=base({accent:colour(p.status),banner:true});
@@ -55,11 +72,11 @@ function approvalCard(p,g){const c=base({accent:colour(p.status),banner:true});
  else if(!['completed','denied','cancelled'].includes(p.status))c.addActionRowComponents(buttonRow(btn(`msrpm:edit:${p.id}`,'Edit Details'),btn(`msrpm:status:${p.id}`,'Update Status'),btn(`msrpm:assign:${p.id}`,'Reassign')));
  return finish(c);
 }
-function smallCard(p,g,owner=false){const c=base({accent:colour(p.status)});section(c,`## ${icon(g,'msrp_appeal')}${safe(p.title,110)}  ·  #${p.id}\n${projectText(p)}`);
+function smallCard(p,g,canEdit=false){const c=base({accent:colour(p.status)});section(c,`## ${icon(g,'msrp_appeal')}${safe(p.title,110)}  ·  #${p.id}\n${projectText(p)}`);
  if(p.feedback)section(c,`**Management Feedback**\n${safe(p.feedback,700)}`);
  if(p.status==='completed'&&evidenceText(p)){c.addSeparatorComponents(new SeparatorBuilder());section(c,evidenceText(p));}
  if(p.status==='pending')section(c,'-# Waiting for management approval. Project controls are unavailable.');
- else if(!['denied','cancelled','completed','awaiting_review'].includes(p.status)){
+ else if(canEdit&&!['denied','cancelled','completed','awaiting_review'].includes(p.status)){
  c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(buttonRow(btn(`msrpm:status:${p.id}`,'Update Status'),btn(`msrpm:edit:${p.id}`,'Edit Details'),btn(`msrpm:submit:${p.id}`,'Submit Project',ButtonStyle.Primary)));
  }
  return finish(c);
@@ -76,25 +93,51 @@ async function channel(i,id){const c=await i.guild.channels.fetch(id);if(!c||!c.
 async function sync(i,p){if(!p.approvalMessageId)return;try{const c=await channel(i,APPROVAL_CHANNEL);const m=await c.messages.fetch(p.approvalMessageId);await m.edit(sendPayload(approvalCard(p,i.guild),{banner:true}));}catch(e){console.error('[MEDIA] Failed to refresh project #'+p.id,e);throw new Error('Project saved, but its management message could not be refreshed. Check channel permissions.');}}
 async function respond(i,msg){if(i.deferred||i.replied)return i.editReply({content:msg});return i.reply({content:msg,flags:MessageFlags.Ephemeral});}
 async function defer(i){if(!i.deferred&&!i.replied)await i.deferReply({flags:MessageFlags.Ephemeral});}
-function mineList(i,completed=false){return Object.values(load().projects).filter(p=>p.guildId===i.guildId&&(completed?p.status==='completed':p.assignee===i.user.id&&!['completed','cancelled','denied'].includes(p.status))).sort((a,b)=>b.updatedAt-a.updatedAt);}
-function overviewPicker(i, filter='all'){
+function mineList(i,mode='mine'){
+ const own=p=>p.creator===i.user.id || p.assignee===i.user.id;
+ const active=new Set(['not_started','in_progress','on_hold','changes_requested','awaiting_review']);
+ return Object.values(load().projects)
+  .filter(p=>p.guildId===i.guildId && (
+   mode==='completed' ? p.status==='completed' :
+   mode==='active' ? p.assignee===i.user.id && active.has(p.status) :
+   own(p) && p.status!=='completed'
+  ))
+  .sort((a,b)=>b.updatedAt-a.updatedAt);
+}
+function overviewPicker(i,filter='all'){
  const items=Object.values(load().projects).filter(p=>p.guildId===i.guildId && (filter==='all'?p.status!=='completed':p.status===filter)).sort((a,b)=>b.updatedAt-a.updatedAt);
- const c=base({banner:false}); section(c,`## Management Overview\n**Filter:** ${filter==='all'?'All open projects':status(filter)}\n**Matching projects:** ${items.length}`);
+ const c=base({banner:false});
+ section(c,`## Management Overview\n**Filter:** ${filter==='all'?'All open projects':status(filter)}\n**Matching projects:** ${items.length}`);
  const filters=['all','pending','not_started','in_progress','on_hold','awaiting_review','changes_requested'];
- c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(new StringSelectMenuBuilder().setCustomId('msrpm:filter:0').setPlaceholder('Filter by status').addOptions(filters.map(x=>({label:x==='all'?'All Open Projects':status(x),value:x,default:x===filter})))));
- if(items.length)c.addActionRowComponents(row(new StringSelectMenuBuilder().setCustomId('msrpm:pickmanage:0').setPlaceholder('Choose project').addOptions(items.slice(0,25).map(p=>({label:p.title.slice(0,90),value:p.id,description:`#${p.id} · ${status(p.status)}`.slice(0,100)})))));
+ c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(new StringSelectMenuBuilder()
+  .setCustomId('msrpm:filter:0')
+  .setPlaceholder('Filter projects by status')
+  .addOptions(filters.map(x=>({label:x==='all'?'All Open Projects':status(x),value:x,default:x===filter})))));
+ if(items.length)c.addActionRowComponents(row(new StringSelectMenuBuilder()
+  .setCustomId('msrpm:pickmanage:0')
+  .setPlaceholder('Select project to manage')
+  .addOptions(items.slice(0,25).map(p=>({label:p.title.slice(0,90),value:p.id,description:`#${p.id} · ${status(p.status)}`.slice(0,100)})))));
+ if(!items.length)section(c,'-# No projects match this filter.');
  if(items.length>25)section(c,'-# Showing the 25 most recently updated matching projects.');
  return finish(c);
 }
-function picker(i,completed=false){
- const arr=mineList(i,completed);
+function picker(i,mode='mine'){
+ const arr=mineList(i,mode);
  const c=base({banner:true});
- section(c,completed?'## Completed Media Projects\nSelect a finished project to view its full record.':'## My Media Projects\nSelect a project to manage it or review its status.');
- if(!arr.length) section(c,completed?'No completed projects yet.':'You have no current projects.');
+ const completed=mode==='completed';
+ section(c,completed
+  ? '## Completed Media Projects\nSelect a finished project to view its details, evidence and completion notes.'
+  : mode==='active'
+  ? '## My Active Projects\nSelect a project assigned to you. Pending projects are shown under View My Tasks.'
+  : '## My Media Tasks\nView your projects, including those still waiting for management approval.');
+ if(!arr.length)section(c,completed?'No completed projects yet.':mode==='active'?'You have no active assigned projects.':'You have no projects yet.');
  else {
-   const opts=arr.slice(0,25).map(p=>({label:p.title.slice(0,90),value:p.id,description:(`#${p.id} · ${status(p.status)}`).slice(0,100)}));
-   const sel=new StringSelectMenuBuilder().setCustomId(`msrpm:${completed?'pickdone':'pickmine'}:0`).setPlaceholder(completed?'Choose a completed project':'Choose your project').addOptions(opts);
-   c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(sel));
+  const opts=arr.slice(0,25).map(p=>({label:p.title.slice(0,90),value:p.id,description:(`#${p.id} · ${status(p.status)}`).slice(0,100)}));
+  const pickerAction=completed?'pickdone':mode==='active'?'pickactive':'pickmine';
+  c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(new StringSelectMenuBuilder()
+   .setCustomId(`msrpm:${pickerAction}:0`)
+   .setPlaceholder(completed?'Select a completed project':mode==='active'?'Select an active project':'Select your project')
+   .addOptions(opts)));
  }
  if(arr.length>25)section(c,'-# Showing the 25 most recently updated projects.');
  return finish(c);
@@ -104,11 +147,37 @@ async function handleCommand(i){if(!i.isChatInputCommand()||i.commandName!==comm
 async function handleComponent(i){if(!i.customId?.startsWith('msrpm:'))return false;if(!i.guild){await respond(i,'Server only.');return true;}
  const bits=i.customId.split(':'),action=bits[1],id=bits[2];
  try{
+ if(i.isStringSelectMenu()&&action==='dashboard'){
+  if(!media(i))throw Error('Media Team role required.');
+  const choice=i.values[0];
+  if(choice==='new')await i.showModal(createModal());
+  else if(choice==='completed')await componentReply(i,picker(i,'completed'),true);
+  else if(choice==='overview'){
+   if(!management(i))throw Error('Management access required.');
+   await componentReply(i,overviewPicker(i),false);
+  }else throw Error('Unknown dashboard action.');
+  return true;
+ }
+ // Keep the previous button IDs working if someone presses a cached old dashboard.
  if(i.isButton()&&action==='new'){if(!media(i))throw Error('Media Team role required.');await i.showModal(createModal());return true;}
  if(i.isButton()&&action==='overview'){if(!management(i))throw Error('Management access required.');await componentReply(i,overviewPicker(i),false);return true;}
  if(i.isStringSelectMenu()&&action==='filter'){if(!management(i))throw Error('Management access required.');await componentReply(i,overviewPicker(i,i.values[0]),false);return true;}
- if(i.isButton()&&(action==='mine'||action==='completed')){if(!media(i))throw Error('Media Team role required.');await componentReply(i,picker(i,action==='completed'),true);return true;}
- if(i.isStringSelectMenu()&&['pickmine','pickdone','pickmanage'].includes(action)){const p=load().projects[i.values[0]];if(!p||p.guildId!==i.guildId)throw Error('Project not found.');if(action==='pickmanage'&&!management(i))throw Error('Management access required.');if(action==='pickmine'&&p.assignee!==i.user.id&&!management(i))throw Error('This is not your project.');if(action==='pickdone'&&p.status!=='completed')throw Error('This is not a completed project.');await componentReply(i,action==='pickmanage'?approvalCard(p,i.guild):smallCard(p,i.guild),action==='pickmanage');return true;}
+ if(i.isButton()&&['active','mine','completed'].includes(action)){
+  if(!media(i))throw Error('Media Team role required.');
+  await componentReply(i,picker(i,action==='completed'?'completed':action==='active'?'active':'mine'),true);
+  return true;
+ }
+ if(i.isStringSelectMenu()&&['pickactive','pickmine','pickdone','pickmanage'].includes(action)){
+  const p=load().projects[i.values[0]];
+  if(!p||p.guildId!==i.guildId)throw Error('Project not found.');
+  if(!media(i))throw Error('Media Team role required.');
+  if(action==='pickmanage'&&!management(i))throw Error('Management access required.');
+  if(action==='pickmine'&&p.creator!==i.user.id&&p.assignee!==i.user.id)throw Error('This is not your project.');
+  if(action==='pickactive'&&(p.assignee!==i.user.id||!['not_started','in_progress','on_hold','changes_requested','awaiting_review'].includes(p.status)))throw Error('This project is no longer in your active list.');
+  if(action==='pickdone'&&p.status!=='completed')throw Error('This is not a completed project.');
+  await componentReply(i,action==='pickmanage'?approvalCard(p,i.guild):smallCard(p,i.guild,p.assignee===i.user.id||management(i)),action==='pickmanage');
+  return true;
+ }
  const p=load().projects[action==='form'&&id!=='new'?bits[3]:id];if(!(action==='form'&&id==='new')&&(!p||p.guildId!==i.guildId))throw Error('Project not found.');
  if(i.isButton()){
   if(['approve','deny','accept','revise','denywork','assign'].includes(action)&&!management(i))throw Error('Media management role required.');
