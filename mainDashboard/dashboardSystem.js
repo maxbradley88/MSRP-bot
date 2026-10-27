@@ -233,32 +233,27 @@ function buildMainDashboard(icons) {
         .setCustomId('main_dash_information')
         .setPlaceholder('Information')
         .addOptions(
-            new StringSelectMenuOptionBuilder()
+            applyEmoji(new StringSelectMenuOptionBuilder()
                 .setLabel('Rules')
-                .setValue('rules')
-                .setEmoji(icons.rules),
-            new StringSelectMenuOptionBuilder()
+                .setValue('rules'), icons.rules),
+            applyEmoji(new StringSelectMenuOptionBuilder()
                 .setLabel('Departments')
-                .setValue('departments')
-                .setEmoji(icons.departments),
-            new StringSelectMenuOptionBuilder()
+                .setValue('departments'), icons.departments),
+            applyEmoji(new StringSelectMenuOptionBuilder()
                 .setLabel('Partnerships')
-                .setValue('partnerships')
-                .setEmoji(icons.partnership)
+                .setValue('partnerships'), icons.partnership)
         );
 
     const applicationsMenu = new StringSelectMenuBuilder()
         .setCustomId('main_dash_applications')
         .setPlaceholder('Applications')
         .addOptions(
-            new StringSelectMenuOptionBuilder()
+            applyEmoji(new StringSelectMenuOptionBuilder()
                 .setLabel('Applications')
-                .setValue('applications')
-                .setEmoji(icons.applications),
-            new StringSelectMenuOptionBuilder()
+                .setValue('applications'), icons.applications),
+            applyEmoji(new StringSelectMenuOptionBuilder()
                 .setLabel('Chain of Command')
-                .setValue('chain')
-                .setEmoji(icons.chain)
+                .setValue('chain'), icons.chain)
         );
 
     const notifications = applyEmoji(
@@ -961,6 +956,14 @@ async function toggleNotification(interaction, id) {
     }
 }
 
+async function resetMainDropdown(interaction, icons) {
+    try {
+        if (interaction.message?.edit) await interaction.message.edit({components:[buildMainDashboard(icons)]});
+    } catch (error) {
+        console.warn('[MAIN DASHBOARD] Dropdown placeholder refresh failed:', error?.message || error);
+    }
+}
+
 async function handleInteraction(interaction) {
     const customId = interaction.customId || '';
     if (!customId.startsWith('main_dash_')) return false;
@@ -985,6 +988,7 @@ async function handleInteraction(interaction) {
             else if (value === 'departments') await showDepartments(interaction);
             else if (value === 'partnerships') await showPartnerships(interaction, icons);
             else return false;
+            await resetMainDropdown(interaction, icons);
             return true;
         }
 
@@ -992,6 +996,7 @@ async function handleInteraction(interaction) {
             if (value === 'applications') await showApplications(interaction);
             else if (value === 'chain') await showChainOfCommand(interaction);
             else return false;
+            await resetMainDropdown(interaction, icons);
             return true;
         }
     }
@@ -999,7 +1004,32 @@ async function handleInteraction(interaction) {
     return false;
 }
 
+async function refreshForBulk(guild) {
+    const data = loadData();
+    const { channelId: savedChannelId, messageId } = data.dashboard || {};
+    const channelId = savedChannelId || process.env.MSRP_MAIN_DASHBOARD_CHANNEL_ID;
+    if (!channelId) return { action: 'skipped', reason: 'No saved Information Dashboard channel. Set MSRP_MAIN_DASHBOARD_CHANNEL_ID once to initialise.' };
+    const channel = await guild.channels.fetch(channelId);
+    if (!channel || typeof channel.send !== 'function') throw new Error('Saved Information Dashboard channel is unavailable.');
+    const icons = getDashboardIcons(guild);
+    const payload = { flags: MessageFlags.IsComponentsV2, components: [buildMainDashboard(icons)], files: attachmentFiles(), allowedMentions: { parse: [] } };
+    let message = null;
+    if (messageId) {
+        try { message = await channel.messages.fetch(messageId); }
+        catch (error) { if (error.code !== 10008) throw error; }
+    }
+    if (message) {
+        try { await message.edit(payload); return {action:'updated',url:message.url}; }
+        catch (error) { if (error.code !== 10008) throw error; }
+    }
+    const sent = await channel.send(payload);
+    data.dashboard = {channelId:channel.id,messageId:sent.id};
+    saveData(data);
+    return {action:'created',url:sent.url};
+}
+
 module.exports = {
+    refreshForBulk,
     commands,
     executeCommand,
     handleAutocomplete,

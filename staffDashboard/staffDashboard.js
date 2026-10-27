@@ -136,6 +136,15 @@ async function handleComponent(interaction) {
   const guide=data.guides[Number(selected)];
   if(!guide || selected==='empty') await respond(interaction,'That guide is no longer available.');
   else await respond(interaction,`**${guide.name}:** ${guide.link}`);
+  // Reset the selected item without changing the saved guide or posting a new dashboard.
+  try { if (interaction.message?.edit) await interaction.message.edit({components:[layout(interaction.guild,data.guides)]}); }
+  catch(e) { console.warn('[STAFF DASHBOARD] Guide dropdown reset failed:',e?.message||e); }
   return true;
 }
-module.exports={commands,handleCommand,handleComponent,handleAutocomplete};
+async function refreshForBulk(guild) {
+  const data = load();
+  const oldId = data.messageId;
+  const message = await updateDashboard(guild, data, {create:true});
+  return { action: oldId && oldId === message.id ? 'updated' : 'created', url: message.url };
+}
+module.exports={commands,handleCommand,handleComponent,handleAutocomplete,refreshForBulk};

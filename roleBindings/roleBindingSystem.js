@@ -477,7 +477,7 @@ function buildNameManager(guild, config) {
                     new StringSelectMenuOptionBuilder()
                         .setLabel(nameRuleOptionLabel(guild, rule))
                         .setValue(rule.id)
-                        .setDescription(rule.nameMode === 'discord_username' ? 'Discord username' : 'Discord display name (Roblox username)')
+                        .setDescription(rule.nameMode === 'custom' ? `Custom: ${String(rule.customName || '').slice(0, 75)}` : rule.nameMode === 'discord_username' ? 'Discord username' : 'Discord display name (Roblox username)')
                 )
             );
         container.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
@@ -527,14 +527,20 @@ function buildNameEditor(guild, state) {
                 .setLabel('Discord display name (Roblox username)')
                 .setDescription('Example: CD・Max (RobloxName)')
                 .setValue('display_roblox')
-                .setDefault(state.nameMode !== 'discord_username'),
+                .setDefault(state.nameMode === 'display_roblox'),
             new StringSelectMenuOptionBuilder()
                 .setLabel('Discord username')
                 .setDescription('Example: UNVERIFIED・maxbradley')
                 .setValue('discord_username')
-                .setDefault(state.nameMode === 'discord_username')
+                .setDefault(state.nameMode === 'discord_username'),
+            new StringSelectMenuOptionBuilder()
+                .setLabel('Custom Name')
+                .setDescription('Apply the same nickname to members matching this naming rule')
+                .setValue('custom')
+                .setDefault(state.nameMode === 'custom')
         );
 
+    const customButton = new ButtonBuilder().setCustomId('rolename_editor_custom').setLabel('Set Custom Name').setStyle(ButtonStyle.Primary).setDisabled(state.nameMode !== 'custom');
     const prefixButton = applyIcon(
         new ButtonBuilder().setCustomId('rolename_editor_prefix').setLabel('Set Prefix').setStyle(ButtonStyle.Primary),
         guild,
@@ -583,8 +589,9 @@ function buildNameEditor(guild, state) {
 ` +
                 `**Prefix:** ${state.prefix || '*None*'}
 ` +
-                `**Format:** ${state.nameMode === 'discord_username' ? 'Discord username' : 'Discord display name (Roblox username)'}
+                `**Format:** ${state.nameMode === 'custom' ? 'Custom Name' : state.nameMode === 'discord_username' ? 'Discord username' : 'Discord display name (Roblox username)'}
 ` +
+                (state.nameMode === 'custom' ? `**Custom name:** ${state.customName || '*Not set*'}\n` : '') +
                 `**Excluded roles:** ${roleMentions(guild, state.excludedRoleIds, 12)}`
             )
         )
@@ -595,7 +602,7 @@ function buildNameEditor(guild, state) {
         .addActionRowComponents(new ActionRowBuilder().addComponents(mode))
         .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Optional exclusions'))
         .addActionRowComponents(new ActionRowBuilder().addComponents(excludePicker))
-        .addActionRowComponents(new ActionRowBuilder().addComponents(prefixButton, clearButton))
+        .addActionRowComponents(new ActionRowBuilder().addComponents(prefixButton, customButton, clearButton))
         .addSeparatorComponents(new SeparatorBuilder())
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
@@ -626,6 +633,15 @@ function makePrefixModal(state) {
                 .setDescription('Leave blank for no prefix.')
                 .setTextInputComponent(prefix)
         );
+}
+
+function makeCustomNameModal(state) {
+    const field = new TextInputBuilder().setCustomId('custom_name').setStyle(TextInputStyle.Short)
+        .setRequired(true).setMinLength(1).setMaxLength(32)
+        .setPlaceholder('Nickname to apply to all matching members');
+    if (state.customName) field.setValue(state.customName);
+    return new ModalBuilder().setCustomId('rolename_custom_modal').setTitle('Set Custom Nickname')
+        .addLabelComponents(new LabelBuilder().setLabel('Custom nickname (1-32 characters)').setTextInputComponent(field));
 }
 
 function buildCurrentBindingsView(guild, config) {
@@ -824,7 +840,10 @@ async function syncNickname(member, config) {
         const prefix = String(rule.prefix || '').replace(/[^A-Za-z]/g, '').slice(0, 16);
         const base = getDiscordBaseName(member);
 
-        if (rule.nameMode === 'discord_username') {
+        if (rule.nameMode === 'custom') {
+            newName = String(rule.customName || '').trim().slice(0, 32);
+            if (!newName) return {status:'skipped', reason:'custom name not configured'};
+        } else if (rule.nameMode === 'discord_username') {
             newName = prefix ? `${prefix}・${member.user.username}` : member.user.username;
         } else {
             const roblox = await getRobloxUsername(member.id);
@@ -1034,7 +1053,7 @@ async function handleInteraction(interaction) {
     }
     if (id === 'rolename_add') {
         try { await interaction.guild.roles.fetch(); } catch {}
-        setEditState(interaction, 'name', { id: `nick-${Date.now()}`, isNew: true, roleId: null, prefix: '', nameMode: 'display_roblox', excludedRoleIds: [], rolePage: 0, excludePage: 0 });
+        setEditState(interaction, 'name', { id: `nick-${Date.now()}`, isNew: true, roleId: null, prefix: '', nameMode: 'display_roblox', customName: '', excludedRoleIds: [], rolePage: 0, excludePage: 0 });
         await interaction.reply(componentsV2Reply(buildNameEditor(interaction.guild, getEditState(interaction, 'name'))));
         return true;
     }
@@ -1165,6 +1184,7 @@ async function handleInteraction(interaction) {
             roleId: null,
             prefix: '',
             nameMode: 'display_roblox',
+            customName: '',
             excludedRoleIds: [],
             rolePage: 0,
             excludePage: 0,
@@ -1186,6 +1206,7 @@ async function handleInteraction(interaction) {
             roleId: rule.roleId,
             prefix: rule.prefix || '',
             nameMode: rule.nameMode || 'display_roblox',
+            customName: rule.customName || '',
             excludedRoleIds: uniqueIds(rule.excludedRoleIds),
             rolePage: 0,
             excludePage: 0,
@@ -1256,6 +1277,32 @@ async function handleInteraction(interaction) {
         return true;
     }
 
+    if (id === 'rolename_editor_custom') {
+        const state = getEditState(interaction, 'name');
+        if (!state) {
+            await interaction.reply({content:'This editor expired. Open Name Rules again.',flags:MessageFlags.Ephemeral});
+            return true;
+        }
+        await interaction.showModal(makeCustomNameModal(state));
+        return true;
+    }
+
+    if (id === 'rolename_custom_modal' && interaction.isModalSubmit()) {
+        const state = getEditState(interaction, 'name');
+        if (!state) {
+            await interaction.reply({content:'This editor expired. Open Name Rules again.',flags:MessageFlags.Ephemeral});
+            return true;
+        }
+        state.customName = interaction.fields.getTextInputValue('custom_name').trim().slice(0,32);
+        if (!state.customName) {
+            await interaction.reply({content:'Enter a non-empty custom nickname.',flags:MessageFlags.Ephemeral});
+            return true;
+        }
+        setEditState(interaction, 'name', state);
+        await interaction.reply({content:`Custom nickname set to **${state.customName.replace(/@/g,'@\u200b')}**. Save the name rule, then Publish Changes to apply it.`,flags:MessageFlags.Ephemeral});
+        return true;
+    }
+
     if (id === 'rolename_editor_prefix') {
         const state = getEditState(interaction, 'name');
         if (!state) {
@@ -1284,12 +1331,17 @@ async function handleInteraction(interaction) {
             await interaction.reply({ content: '❌ Choose the Discord role this naming rule applies to.', flags: MessageFlags.Ephemeral });
             return true;
         }
+        if (state.nameMode === 'custom' && !String(state.customName || '').trim()) {
+            await interaction.reply({content:'Set your Custom Name first.',flags:MessageFlags.Ephemeral});
+            return true;
+        }
         const currentConfig = loadConfig();
         const rule = {
             id: state.id,
             roleId: state.roleId,
             prefix: String(state.prefix || '').replace(/[^A-Za-z]/g, '').slice(0, 16),
-            nameMode: state.nameMode === 'discord_username' ? 'discord_username' : 'display_roblox',
+            nameMode: ['custom','discord_username'].includes(state.nameMode) ? state.nameMode : 'display_roblox',
+            customName: String(state.customName || '').trim().slice(0,32),
             excludedRoleIds: uniqueIds(state.excludedRoleIds)
         };
         const index = currentConfig.nicknameRules.findIndex(x => x.id === state.id);
@@ -1390,7 +1442,33 @@ async function handleGuildRoleDelete(role, client) {
     await refreshDashboard(client);
 }
 
+async function refreshForBulk(guild) {
+    const config = loadConfig();
+    const channelId = config.dashboard?.channelId || process.env.MSRP_ROLE_DASHBOARD_CHANNEL_ID;
+    if (!channelId) {
+        return {action:'skipped',reason:'No saved Role Binding Dashboard channel; set MSRP_ROLE_DASHBOARD_CHANNEL_ID once to initialise.'};
+    }
+    const channel = await guild.channels.fetch(channelId);
+    if (!channel || typeof channel.send !== 'function') throw Error('Role Binding Dashboard channel unavailable.');
+    await ensureRoleBindingIcons(guild);
+    let old;
+    if (config.dashboard?.messageId) {
+        try { old = await channel.messages.fetch(config.dashboard.messageId); }
+        catch (e) { if (e.code !== 10008) throw e; }
+    }
+    const payload = buildDashboardPayload(config, guild, {includeFiles: true});
+    if (old) {
+        try { await old.edit({...payload,attachments:[]}); return {action:'updated',url:old.url}; }
+        catch (e) { if (e.code !== 10008) throw e; }
+    }
+    const message = await channel.send(payload);
+    config.dashboard = {channelId:channel.id,messageId:message.id};
+    saveConfig(config);
+    return {action:'created',url:message.url};
+}
+
 module.exports = {
+    refreshForBulk,
     command,
     executeDashboard,
     handleInteraction,

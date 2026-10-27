@@ -15,6 +15,10 @@ const REVIEW_CHANNEL_ID = '1563809877359337603';
 const FOUNDER_ROLE_ID = '1547525713853288448';
 const GAME_STAFF_ROLE_ID = '1563761372272009297';
 const SUPPORT_STAFF_ROLE_ID = '1556203938427183105';
+const MEDIA_FORM_NAME = 'Media Staff';
+const MEDIA_REVIEW_CHANNEL_ID = '1564576335177719949';
+const HEAD_MEDIA_ROLE_ID = '1550808851538780160';
+const TRIAL_MEDIA_ROLE_ID = '1550809222520770613';
 const DATA_DIR = __dirname;
 const FORMS_FILE = path.join(DATA_DIR, 'forms.runtime.json');
 const RECORDS_FILE = path.join(DATA_DIR, 'applications.runtime.json');
@@ -52,20 +56,26 @@ function defaultForms() {
   return [
     {name:'Game Staff', link:data.gameStaff || null, roleId:GAME_STAFF_ROLE_ID},
     {name:'Support Staff', link:data.supportTeam || null, roleId:SUPPORT_STAFF_ROLE_ID},
+    {name:MEDIA_FORM_NAME, link:data.mediaStaff || null, roleId:TRIAL_MEDIA_ROLE_ID},
   ];
 }
 function getForms() {
   const forms = readJson(FORMS_FILE, null);
-  return Array.isArray(forms) ? forms : defaultForms();
+  if (!Array.isArray(forms)) return defaultForms();
+  const mediaLink=loadDashboard().applications?.mediaStaff;
+  if (mediaLink && !forms.some(f=>isMediaForm(f.name))) {
+    return [...forms,{name:MEDIA_FORM_NAME,link:mediaLink,roleId:TRIAL_MEDIA_ROLE_ID}];
+  }
+  return forms;
 }
 function saveForms(forms) { writeJson(FORMS_FILE, forms); }
 function updateLegacyFormLink(key, link) {
-  const name=key==='gameStaff'?'Game Staff':key==='supportTeam'?'Support Staff':key==='mediaStaff'?'Media Staff':null;
+  const name=key==='gameStaff'?'Game Staff':key==='supportTeam'?'Support Staff':key==='mediaStaff'?MEDIA_FORM_NAME:null;
   if (!name) return;
   const forms=getForms();
   const f=findForm(name,forms);
   if (f) f.link=link||null;
-  else forms.push({name,link:link||null,roleId:key==='gameStaff'?GAME_STAFF_ROLE_ID:key==='supportTeam'?SUPPORT_STAFF_ROLE_ID:null});
+  else forms.push({name,link:link||null,roleId:key==='gameStaff'?GAME_STAFF_ROLE_ID:key==='mediaStaff'?TRIAL_MEDIA_ROLE_ID:SUPPORT_STAFF_ROLE_ID});
   saveForms(forms);
 }
 function findForm(name, forms = getForms()) {
@@ -75,6 +85,16 @@ function readRecords() { return readJson(RECORDS_FILE, {}); }
 function saveRecords(records) { writeJson(RECORDS_FILE, records); }
 function founderIds() {
   return [...new Set((process.env.MSRP_FOUNDER_IDS || '').split(',').map(s=>s.trim()).filter(s=>/^\d{17,20}$/.test(s)))];
+}
+function isMediaForm(recordOrName) {
+  const name=typeof recordOrName==='string'?recordOrName:recordOrName?.formName;
+  return String(name||'').trim().toLowerCase()===MEDIA_FORM_NAME.toLowerCase();
+}
+function reviewChannel(record) { return isMediaForm(record)?MEDIA_REVIEW_CHANNEL_ID:REVIEW_CHANNEL_ID; }
+function reviewerRoles(record) { return isMediaForm(record)?[HEAD_MEDIA_ROLE_ID,FOUNDER_ROLE_ID]:[FOUNDER_ROLE_ID]; }
+function canReview(interaction,record) {
+  if (isMediaForm(record)) return [HEAD_MEDIA_ROLE_ID,FOUNDER_ROLE_ID].some(id=>interaction.member?.roles?.cache?.has(id));
+  return isFounder(interaction);
 }
 function isFounder(interaction) {
   const ids = founderIds();
@@ -110,15 +130,15 @@ function renderApplication(record, guild) {
   const linkable = isUnlinked && record.status === 'unlinked';
   const pending = !isUnlinked && record.status === 'pending';
   const emoji = applicationEmoji(guild);
-  const statusText = linkable ? 'Applicant not linked · Foundership action required'
-    : pending ? `Pending review · ${record.votes.length}/3 approvals`
+  const statusText = linkable ? 'Applicant not linked · Reviewer action required'
+    : pending ? (isMediaForm(record) ? 'Pending review · One approval required' : `Pending review · ${record.votes.length}/3 approvals`)
     : record.status === 'approved' ? `Approved by <@${record.decidedBy}>${record.forced ? ' (force approved)' : ''}`
     : `Denied by <@${record.decidedBy}>`;
 
   const intro = isUnlinked
     ? [
         'We could not identify the applicant from their submitted Discord User ID.',
-        'Only the first four answers are shown until Foundership links the correct member.',
+        'Only the first four answers are shown until an authorised reviewer links the correct member.',
         `**Submitted Discord ID:** ${escapeText(record.submittedUserId || '(missing)').slice(0, 120)}`,
         `**Status:** ${statusText}`,
         '-# Please verify their identity before linking a member. A matching username alone is not proof.'
@@ -126,7 +146,7 @@ function renderApplication(record, guild) {
     : [
         `A new application has been submitted by <@${record.userId}>. Review the answers below and use the buttons to approve or deny the application. The MSRP bot will assign the role when approved.`,
         `**Status:** ${statusText}`,
-        record.votes.length ? `-# Founder approvals: ${record.votes.map(id => `<@${id}>`).join(', ')}` : '',
+        !isMediaForm(record) && record.votes.length ? `-# Founder approvals: ${record.votes.map(id => `<@${id}>`).join(', ')}` : '',
         '-# Discord identity was supplied by the applicant and should be verified before approval.'
       ];
 
@@ -162,18 +182,18 @@ function renderApplication(record, guild) {
   } else {
     buttons.addComponents(
       new ButtonBuilder().setCustomId(`msrp_form:approve:${record.id}`)
-        .setLabel(`Approve ${record.votes.length}/3`).setStyle(ButtonStyle.Success).setDisabled(!pending),
+        .setLabel(isMediaForm(record)?'Accept':`Approve ${record.votes.length}/3`).setStyle(ButtonStyle.Success).setDisabled(!pending),
       new ButtonBuilder().setCustomId(`msrp_form:deny:${record.id}`)
         .setLabel('Deny').setStyle(ButtonStyle.Danger).setDisabled(!pending),
-      new ButtonBuilder().setCustomId(`msrp_form:force:${record.id}`)
-        .setLabel('Force Approve').setStyle(ButtonStyle.Secondary).setDisabled(!pending)
+      ...(isMediaForm(record)?[]:[new ButtonBuilder().setCustomId(`msrp_form:force:${record.id}`)
+        .setLabel('Force Approve').setStyle(ButtonStyle.Secondary).setDisabled(!pending)])
     );
   }
   container.addSeparatorComponents(new SeparatorBuilder());
   container.addActionRowComponents(buttons);
   container.addSeparatorComponents(new SeparatorBuilder());
   container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(imageItem('image.png')));
-  return [new TextDisplayBuilder().setContent(`<@&${FOUNDER_ROLE_ID}>`), container];
+  return [new TextDisplayBuilder().setContent(reviewerRoles(record).map(id=>`<@&${id}>`).join(' ')), container];
 }
 function imageFiles() {
   return [new AttachmentBuilder(BANNER,{name:'ticket-dashboard.png'}),new AttachmentBuilder(FOOTER,{name:'image.png'})];
@@ -217,7 +237,7 @@ async function handleCommand(interaction) {
     if (mode==='add' && existing) throw new Error('A form with that name already exists. Select Update.');
     if (mode==='update' && !existing) throw new Error('That form is not registered. Select Add first.');
     if (mode==='add' && forms.length>=20) throw new Error('At most 20 forms can be listed.');
-    const roleId=role?.id || existing?.roleId || null;
+    const roleId=isMediaForm(name)?TRIAL_MEDIA_ROLE_ID:(role?.id || existing?.roleId || null);
     if (!roleId) throw new Error('Choose an Approval Role for a new application type.');
     if (role && (role.managed || role.id===interaction.guildId)) throw new Error('That role cannot be assigned by the bot.');
     if (existing) {existing.link=link;existing.roleId=roleId;}
@@ -229,7 +249,7 @@ async function handleCommand(interaction) {
 }
 async function updateMessage(client, record, pingLinkedMember = false) {
   if (!record.messageId) return;
-  const channel=await client.channels.fetch(REVIEW_CHANNEL_ID);
+  const channel=await client.channels.fetch(reviewChannel(record));
   const msg=await channel.messages.fetch(record.messageId);
   await msg.edit({
     components:renderApplication(record,msg.guild),
@@ -281,21 +301,21 @@ async function handleIncoming(message) {
       if (records[id]) { imported=true; return; }
       const guild=message.guild;
       if (!guild) throw new Error('Submission bridge must be in a server');
-      const channel=await guild.channels.fetch(REVIEW_CHANNEL_ID);
+      const channel=await guild.channels.fetch(reviewChannel({formName:form.name}));
       if (!channel?.send) throw new Error('Review channel not found');
       const looksLikeId = /^\d{17,20}$/.test(userId);
       const applicant = looksLikeId ? await guild.members.fetch(userId).catch(() => null) : null;
       const linkedId = applicant && !applicant.user?.bot ? userId : null;
       const record = {
         id, formName:form.name, userId:linkedId, submittedUserId:userId.slice(0,120),
-        roleId:form.roleId,
+        roleId:isMediaForm(form.name)?TRIAL_MEDIA_ROLE_ID:form.roleId,
         answers:payload.answers.map(a=>({question:String(a.question||'').slice(0,500),answer:String(a.answer??'').slice(0,12000)})),
         votes:[], status:linkedId ? 'pending' : 'unlinked',
         wasUnlinked:!linkedId, linkedAt:null, createdAt:Date.now(), messageId:null
       };
       const posted=await channel.send({
         components:renderApplication(record,guild), files:imageFiles(), flags:MessageFlags.IsComponentsV2,
-        allowedMentions:{users:linkedId ? [linkedId] : [],roles:[FOUNDER_ROLE_ID],repliedUser:false}
+        allowedMentions:{users:linkedId ? [linkedId] : [],roles:reviewerRoles(record),repliedUser:false}
       });
       record.messageId=posted.id;
       records[id]=record;
@@ -329,6 +349,20 @@ async function recoverPending(client) {
     }
   } catch(error) {console.error('[APPLICATIONS] Bridge recovery failed:',error.message);}
 }
+function decisionDM(record,outcome,reviewerId) {
+  const accepted=outcome==='approved';
+  const container=new ContainerBuilder().setAccentColor(accepted?0x38A66A:0xCF4C56)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent([
+      `## Media Staff Application ${accepted?'Accepted':'Denied'}`,
+      `**Application:** ${escapeText(record.formName)}`,
+      `**Reviewed by:** <@${reviewerId}>`,
+      accepted?'**Result:** Accepted — you have been awarded the Trial Media role.':`**Reason:** ${escapeText(record.decisionReason||'No reason provided.').slice(0,900)}`,
+      accepted?'Welcome to the MSRP Media Team!':''
+    ].filter(Boolean).join('\n\n')))
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(imageItem('image.png')));
+  return {components:[container],files:[new AttachmentBuilder(FOOTER,{name:'image.png'})],flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[]}};
+}
 async function approveMember(guild,record) {
   const member=await guild.members.fetch(record.userId).catch(()=>null);
   if (!member) throw new Error('Applicant is not in the Discord server.');
@@ -340,8 +374,9 @@ async function approveMember(guild,record) {
 }
 async function applyDecision(interaction,action,reason='') {
   const id=interaction.customId.split(':')[2];
-  if (!isFounder(interaction)) {
-    await interaction.reply({content:'Only the three configured Foundership reviewers may decide applications.',flags:MessageFlags.Ephemeral});
+  const preview=readRecords()[interaction.customId.split(':')[2]];
+  if (!preview || !canReview(interaction,preview)) {
+    await interaction.reply({content:'You are not authorised to review this application.',flags:MessageFlags.Ephemeral});
     return;
   }
   const key=`decide:${id}`;
@@ -362,23 +397,31 @@ async function applyDecision(interaction,action,reason='') {
     if(action==='approve') {
       if(r.votes.includes(interaction.user.id)) throw new Error('You have already approved this application.');
       const next=[...r.votes,interaction.user.id];
-      if (next.length>=3) {
+      if (next.length >= (isMediaForm(r)?1:3)) {
         await approveMember(interaction.guild,r);
         r.status='approved';r.decidedBy=interaction.user.id;r.forced=false;
-        notice='All three founders approved this application. The acceptance role was assigned.';
+        notice=isMediaForm(r)?'Media Staff application accepted. Trial Media role assigned.':'All three founders approved this application. The acceptance role was assigned.';
       } else notice=`Approval recorded (${next.length}/3).`;
       r.votes=next;
     } else if(action==='force') {
       await approveMember(interaction.guild,r);
       r.status='approved';r.decidedBy=interaction.user.id;r.forced=true;r.decisionReason=reason;
       notice='Force approval completed and the acceptance role assigned.';
-    } else if(action==='deny') {
+    }
+    if(action==='deny') {
       r.status='denied';r.decidedBy=interaction.user.id;r.decisionReason=reason;
       notice='Application denied.';
     }
     saveRecords(records);
     try { await updateMessage(interaction.client,r); }
     catch(e) { console.error('[APPLICATIONS] Could not refresh review:',e.message);notice+=' (Review message could not be refreshed.)'; }
+    if(r.status==='approved' && isMediaForm(r)) {
+      const user=await interaction.client.users.fetch(r.userId).catch(()=>null);
+      if (user) try {
+        await user.send(decisionDM(r,'approved',interaction.user.id));
+        notice+=' The applicant was notified by DM.';
+      } catch {notice+=' Applicant DM could not be delivered.';}
+    }
     if(action==='deny') {
       if (!r.userId) {
         notice += ' Applicant was not linked, so no Discord DM was sent.';
@@ -386,7 +429,7 @@ async function applyDecision(interaction,action,reason='') {
         const user=await interaction.client.users.fetch(r.userId).catch(()=>null);
         try {
           if (!user) throw new Error('Discord user not found');
-          await user.send(`Your **${r.formName}** application for Melbourne State Roleplay was denied.\n\n**Reason:** ${String(reason).slice(0,1200)}`);
+          await user.send(isMediaForm(r)?decisionDM(r,'denied',interaction.user.id):`Your **${r.formName}** application for Melbourne State Roleplay was denied.\n\n**Reason:** ${String(reason).slice(0,1200)}`);
           notice += ' The applicant was notified by DM.';
         } catch { notice += ' **DM could not be delivered** (user may have DMs disabled).'; }
       }
@@ -399,8 +442,8 @@ async function applyDecision(interaction,action,reason='') {
   } finally { inProgress.delete(key); }
 }
 async function handleLinkSelection(interaction, id) {
-  if (!isFounder(interaction)) {
-    await interaction.reply({content:'Only the three configured founders may link applicants.',flags:MessageFlags.Ephemeral});
+  if (!canReview(interaction,readRecords()[id])) {
+    await interaction.reply({content:'Only authorised reviewers may link applicants.',flags:MessageFlags.Ephemeral});
     return;
   }
   // Use the same record-level lock as approval/denial to prevent a race.
@@ -457,8 +500,8 @@ async function handleComponent(interaction) {
   if (!/^[a-f0-9]{24}$/.test(id||'')) return false;
 
   if (action==='link' && interaction.isButton()) {
-    if (!isFounder(interaction)) {
-      await interaction.reply({content:'Only the three configured founders may link applicants.',flags:MessageFlags.Ephemeral});
+    if (!canReview(interaction,readRecords()[id])) {
+      await interaction.reply({content:'Only authorised reviewers may link applicants.',flags:MessageFlags.Ephemeral});
       return true;
     }
     const r = readRecords()[id];
@@ -485,11 +528,12 @@ async function handleComponent(interaction) {
     return true;
   }
   if ((action==='deny'||action==='force') && interaction.isButton()) {
-    if (!isFounder(interaction)) {
-      await interaction.reply({content:'Only configured Foundership reviewers can make this decision.',flags:MessageFlags.Ephemeral});
+    if (!canReview(interaction,readRecords()[id])) {
+      await interaction.reply({content:'You cannot make decisions on this application.',flags:MessageFlags.Ephemeral});
       return true;
     }
     const record=readRecords()[id];
+    if(action==='force' && isMediaForm(record)) {await interaction.reply({content:'Media Staff applications use one normal acceptance; Force Approve is not available.',flags:MessageFlags.Ephemeral});return true;}
     if (!record || !['pending','unlinked'].includes(record.status) || (action==='force' && record.status!=='pending')) {
       await interaction.reply({content:'This application is already decided, or must be linked before approval.',flags:MessageFlags.Ephemeral});
       return true;
