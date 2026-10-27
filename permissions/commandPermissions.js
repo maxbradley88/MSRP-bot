@@ -7,7 +7,7 @@ const EVENT_TEAM_ROLE_ID = '1558396994601615460';
 const commandPermissions = {
     'send-ticket-dashboard': [FOUNDERSHIP_ROLE_ID],
     'send-session-dashboard': [FOUNDERSHIP_ROLE_ID],
-    'send-role-dashboard': [FOUNDERSHIP_ROLE_ID],
+    'send-role-dashboard': ['1556177802267590686'],
     'set-session-times': [FOUNDERSHIP_ROLE_ID],
     'reaction-role-message': [FOUNDERSHIP_ROLE_ID],
 
@@ -61,6 +61,14 @@ function canUseCommand(interaction) {
     if (!Object.prototype.hasOwnProperty.call(commandPermissions, commandName)) {
         console.warn(`[COMMAND PERMISSIONS] ${commandName} is not configured.`);
         return false;
+    }
+
+    // Role binding management is exclusively available to this role.
+    // Administrator and higher-ranking roles do not bypass this restriction.
+    if (commandName === 'send-role-dashboard') {
+        const roles = interaction.member?.roles;
+        return Boolean(roles?.cache?.has('1556177802267590686') ||
+            (Array.isArray(roles) && roles.includes('1556177802267590686')));
     }
 
     const allowedRoles = commandPermissions[commandName];

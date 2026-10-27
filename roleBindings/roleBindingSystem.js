@@ -90,11 +90,12 @@ function uniqueIds(values) {
     return [...new Set((values || []).map(String).filter(Boolean))];
 }
 
+const ROLE_BINDING_ACCESS_ROLE_ID = '1556177802267590686';
+
 function canManage(interaction) {
-    return Boolean(
-        interaction.memberPermissions?.has('Administrator') ||
-        interaction.member?.roles?.cache?.has('1547525713853288448')
-    );
+    const roles = interaction.member?.roles;
+    return Boolean(roles?.cache?.has(ROLE_BINDING_ACCESS_ROLE_ID) ||
+        (Array.isArray(roles) && roles.includes(ROLE_BINDING_ACCESS_ROLE_ID)));
 }
 
 function timestampText(value) {
@@ -268,6 +269,13 @@ async function refreshDashboard(client) {
 }
 
 async function executeDashboard(interaction) {
+    if (!canManage(interaction)) {
+        await interaction.reply({
+            content: '❌ Only members with the authorised role can use role bindings.',
+            flags: MessageFlags.Ephemeral
+        });
+        return;
+    }
     const config = loadConfig();
     await ensureRoleBindingIcons(interaction.guild);
     const message = await interaction.channel.send(buildDashboardPayload(config, interaction.guild, { includeFiles: true }));

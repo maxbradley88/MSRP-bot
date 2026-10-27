@@ -40,7 +40,7 @@ function cards(g){
  section(c,`## ${icon(g,'msrp_appeal')}Media Project Manager\nThis dashboard is where the Media Team can log the projects they are working on, track their progress and manage their submissions.`);
  c.addSeparatorComponents(new SeparatorBuilder());
  c.addActionRowComponents(buttonRow(
-  btn('msrpm:active','View Active Projects',ButtonStyle.Secondary),
+  btn('msrpm:completed','View Completed Projects',ButtonStyle.Secondary),
   btn('msrpm:mine','View My Tasks',ButtonStyle.Secondary)
  ));
  c.addActionRowComponents(row(new StringSelectMenuBuilder()
@@ -48,13 +48,12 @@ function cards(g){
   .setPlaceholder('Project Actions')
   .addOptions([
    {label:'Start a New Project',value:'new',description:'Create a project for management approval'},
-   {label:'View Completed Projects',value:'completed',description:'View finished projects and their evidence'},
-   {label:'Management Overview',value:'overview',description:'Filter projects by status (management only)'}
+   {label:'View Active Projects',value:'active',description:'Browse open projects by status (read-only)'}
   ])));
  return finish(c);
 }
 function projectText(p){return [`**Project:** ${safe(p.title,120)}`,`**Type:** ${safe(p.type,60)}`,`**Created by:** <@${p.creator}>`,`**Assigned to:** <@${p.assignee}>`,`**Status:** ${status(p.status)}`,`**Submission date:** ${safe(p.deadline,30)}`,``,`**Description**`,safe(p.description,1400),...(p.notes?[``,`**Project Notes**`,safe(p.notes,650)]:[])].join('\n');}
-function evidenceText(p){const s=p.submission;if(!s)return '';const pieces=[];if(s.link)pieces.push(`**Submission link:** ${safe(s.link,850)}`);if(s.files?.length)pieces.push(`**Attachments:** ${s.files.map(f=>`[${safe(f.name,60)}](${f.url})`).join(' · ')}`);if(s.notes)pieces.push(`**Submission notes:** ${safe(s.notes,900)}`);return pieces.join('\n\n');}
+function evidenceText(p){const s=p.submission;if(!s)return '';const pieces=[];if(s.link)pieces.push(`**Submission link / reference:** ${safe(s.link,850)}`);if(s.files?.length)pieces.push(`**Attachments:** ${s.files.map(f=>`[${safe(f.name,60)}](${f.url})`).join(' · ')}`);if(s.notes)pieces.push(`**Submission notes:** ${safe(s.notes,900)}`);return pieces.join('\n\n');}
 function approvalCard(p,g){const c=base({accent:colour(p.status),banner:true});
  if(p.status==='completed'){
   section(c,`## ${icon(g,'msrp_appeal')}Completed Media Project  ·  #${p.id}\n**${safe(p.title,120)}**`);
@@ -84,10 +83,10 @@ function smallCard(p,g,canEdit=false){const c=base({accent:colour(p.status)});se
 function label(name,id,style=TextInputStyle.Short,required=true,value='',max=1000){const x=new TextInputBuilder().setCustomId(id).setStyle(style).setRequired(required).setMaxLength(max);if(value)x.setValue(String(value).slice(0,max));return new LabelBuilder().setLabel(name).setTextInputComponent(x);}
 function typeLabel(selected){const sel=new StringSelectMenuBuilder().setCustomId('type').setRequired(true).addOptions(TYPES.map(t=>({label:t,value:t,default:t===selected})));return new LabelBuilder().setLabel('Project type').setStringSelectMenuComponent(sel);}
 function createModal(p=null){return new ModalBuilder().setCustomId(p?`msrpm:form:edit:${p.id}`:'msrpm:form:new').setTitle(p?'Edit Media Project':'New Media Project').addLabelComponents(label('Project name','title',TextInputStyle.Short,true,p?.title,120),label('Project description','description',TextInputStyle.Paragraph,true,p?.description,1600),typeLabel(p?.type),label('Submission date (DD/MM/YY)','deadline',TextInputStyle.Short,true,p?.deadline,10),label('Notes (optional)','notes',TextInputStyle.Paragraph,false,p?.notes,800));}
-function submissionModal(p){return new ModalBuilder().setCustomId(`msrpm:form:submit:${p.id}`).setTitle('Submit Project Work').addLabelComponents(label('Work link (optional)','link',TextInputStyle.Short,false,'',900),label('Submission notes (optional)','notes',TextInputStyle.Paragraph,false,'',900),new LabelBuilder().setLabel('Attach finished files (optional)').setFileUploadComponent(new FileUploadBuilder().setCustomId('uploads').setRequired(false).setMinValues(0).setMaxValues(3)));}
+function submissionModal(p){return new ModalBuilder().setCustomId(`msrpm:form:submit:${p.id}`).setTitle('Submit Project Work').addLabelComponents(label('Work link or reference (optional)','link',TextInputStyle.Short,false,'',900),label('Submission notes (optional)','notes',TextInputStyle.Paragraph,false,'',900),new LabelBuilder().setLabel('Attach finished files (optional)').setFileUploadComponent(new FileUploadBuilder().setCustomId('uploads').setRequired(false).setMinValues(0).setMaxValues(3)));}
 function reasonModal(p,op){return new ModalBuilder().setCustomId(`msrpm:form:${op}:${p.id}`).setTitle(op==='revise'?'Return for Changes':op==='deny'?'Deny Project':'Reject Submission').addLabelComponents(label('Reason / feedback','reason',TextInputStyle.Paragraph,true,'',800));}
 function dateCheck(value){const match=/^(\d{2})\/(\d{2})\/(\d{2}|\d{4})$/.exec(value);if(!match)throw Error('Submission date must use DD/MM/YY.');let y=Number(match[3]);if(y<100)y+=2000;const d=new Date(Date.UTC(y,Number(match[2])-1,Number(match[1])));if(d.getUTCFullYear()!==y||d.getUTCMonth()+1!==Number(match[2])||d.getUTCDate()!==Number(match[1]))throw Error('Submission date is not valid.');return value;}
-function link(s){if(!s)return '';try{const u=new URL(s);if(['http:','https:'].includes(u.protocol))return u.href;}catch{}throw Error('Work link must begin with https:// or http://.');}
+function link(s){return String(s??'').trim().slice(0,900);}
 function log(p,actor,event){(p.history??=[]).push({at:Date.now(),by:actor,event});p.updatedAt=Date.now();}
 async function channel(i,id){const c=await i.guild.channels.fetch(id);if(!c||!c.isTextBased()||typeof c.send!=='function')throw Error('Media channel unavailable or bot cannot post there.');return c;}
 async function sync(i,p){if(!p.approvalMessageId)return;try{const c=await channel(i,APPROVAL_CHANNEL);const m=await c.messages.fetch(p.approvalMessageId);await m.edit(sendPayload(approvalCard(p,i.guild),{banner:true}));}catch(e){console.error('[MEDIA] Failed to refresh project #'+p.id,e);throw new Error('Project saved, but its management message could not be refreshed. Check channel permissions.');}}
@@ -105,17 +104,17 @@ function mineList(i,mode='mine'){
   .sort((a,b)=>b.updatedAt-a.updatedAt);
 }
 function overviewPicker(i,filter='all'){
- const items=Object.values(load().projects).filter(p=>p.guildId===i.guildId && (filter==='all'?p.status!=='completed':p.status===filter)).sort((a,b)=>b.updatedAt-a.updatedAt);
+ const items=Object.values(load().projects).filter(p=>p.guildId===i.guildId && (filter==='all'?!['completed','denied','cancelled'].includes(p.status):p.status===filter)).sort((a,b)=>b.updatedAt-a.updatedAt);
  const c=base({banner:false});
- section(c,`## Management Overview\n**Filter:** ${filter==='all'?'All open projects':status(filter)}\n**Matching projects:** ${items.length}`);
+ section(c,`## View Active Projects\nBrowse open Media Team projects. Changes can only be made through the project's management log in the approvals channel.\n\n**Filter:** ${filter==='all'?'All open projects':status(filter)}\n**Matching projects:** ${items.length}`);
  const filters=['all','pending','not_started','in_progress','on_hold','awaiting_review','changes_requested'];
  c.addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(row(new StringSelectMenuBuilder()
   .setCustomId('msrpm:filter:0')
   .setPlaceholder('Filter projects by status')
-  .addOptions(filters.map(x=>({label:x==='all'?'All Open Projects':status(x),value:x,default:x===filter})))));
+  .addOptions(filters.map(x=>({label:x==='all'?'All Open Projects':status(x),value:x})))));
  if(items.length)c.addActionRowComponents(row(new StringSelectMenuBuilder()
-  .setCustomId('msrpm:pickmanage:0')
-  .setPlaceholder('Select project to manage')
+  .setCustomId(`msrpm:pickmanage:${filter}`)
+  .setPlaceholder('View an active project')
   .addOptions(items.slice(0,25).map(p=>({label:p.title.slice(0,90),value:p.id,description:`#${p.id} · ${status(p.status)}`.slice(0,100)})))));
  if(!items.length)section(c,'-# No projects match this filter.');
  if(items.length>25)section(c,'-# Showing the 25 most recently updated matching projects.');
@@ -143,39 +142,64 @@ function picker(i,mode='mine'){
  return finish(c);
 }
 async function componentReply(i,c,banner=false){return i.reply({...sendPayload(c,{banner}),flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral});}
+async function resetDashboardMenu(i){
+ try{if(i.message?.edit)await i.message.edit({components:[cards(i.guild)]});}
+ catch(e){console.warn('[MEDIA PROJECTS] Could not reset dashboard dropdown:',e.message);}
+}
 async function handleCommand(i){if(!i.isChatInputCommand()||i.commandName!==command.name)return false;if(!management(i)){await respond(i,'Foundership or Media management permission required.');return true;}await defer(i);try{const c=await channel(i,PROJECT_CHANNEL),s=load();let msg;if(s.dashboard?.messageId){try{const existing=await c.messages.fetch(s.dashboard.messageId);msg=await existing.edit(sendPayload(cards(i.guild),{banner:true}));}catch(e){if(![10008,10003].includes(e.code))throw e;}}if(!msg)msg=await c.send(sendPayload(cards(i.guild),{banner:true}));s.dashboard={messageId:msg.id,channelId:c.id};save(s);await i.editReply(`Media Project Manager ready: ${msg.url}`);}catch(e){await i.editReply(`Unable to post dashboard: ${e.message}`);}return true;}
 async function handleComponent(i){if(!i.customId?.startsWith('msrpm:'))return false;if(!i.guild){await respond(i,'Server only.');return true;}
  const bits=i.customId.split(':'),action=bits[1],id=bits[2];
  try{
  if(i.isStringSelectMenu()&&action==='dashboard'){
-  if(!media(i))throw Error('Media Team role required.');
   const choice=i.values[0];
-  if(choice==='new')await i.showModal(createModal());
-  else if(choice==='completed')await componentReply(i,picker(i,'completed'),true);
-  else if(choice==='overview'){
-   if(!management(i))throw Error('Management access required.');
-   await componentReply(i,overviewPicker(i),false);
+  // Re-render the public dashboard select after use so the placeholder is restored.
+  if(choice==='new'){
+   if(!media(i))throw Error('Media Team role required.');
+   await i.showModal(createModal());
+   await resetDashboardMenu(i);
+  }else if(choice==='active'){
+   await i.deferUpdate();
+   await resetDashboardMenu(i);
+   await i.followUp({...sendPayload(overviewPicker(i)),flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral});
+  }else if(choice==='completed'){
+   // Backward compatibility for anyone using the previous dashboard menu.
+   await i.deferUpdate();
+   await resetDashboardMenu(i);
+   await i.followUp({...sendPayload(picker(i,'completed'),{banner:true}),flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral});
+  }else if(choice==='overview'){
+   // Backward compatibility for old management dashboards.
+   await i.deferUpdate();
+   await resetDashboardMenu(i);
+   await i.followUp({...sendPayload(overviewPicker(i)),flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral});
   }else throw Error('Unknown dashboard action.');
   return true;
  }
- // Keep the previous button IDs working if someone presses a cached old dashboard.
+ // Older dashboard button IDs continue working until the board is refreshed.
  if(i.isButton()&&action==='new'){if(!media(i))throw Error('Media Team role required.');await i.showModal(createModal());return true;}
- if(i.isButton()&&action==='overview'){if(!management(i))throw Error('Management access required.');await componentReply(i,overviewPicker(i),false);return true;}
- if(i.isStringSelectMenu()&&action==='filter'){if(!management(i))throw Error('Management access required.');await componentReply(i,overviewPicker(i,i.values[0]),false);return true;}
+ if(i.isButton()&&action==='overview'){await componentReply(i,overviewPicker(i),false);return true;}
+ if(i.isStringSelectMenu()&&action==='filter'){
+  await i.update({components:[overviewPicker(i,i.values[0])]});
+  return true;
+ }
  if(i.isButton()&&['active','mine','completed'].includes(action)){
-  if(!media(i))throw Error('Media Team role required.');
-  await componentReply(i,picker(i,action==='completed'?'completed':action==='active'?'active':'mine'),true);
+  if(action==='mine'&&!media(i))throw Error('Media Team role required.');
+  await componentReply(i,action==='active'?overviewPicker(i):picker(i,action==='completed'?'completed':'mine'),action!=='active');
   return true;
  }
  if(i.isStringSelectMenu()&&['pickactive','pickmine','pickdone','pickmanage'].includes(action)){
   const p=load().projects[i.values[0]];
   if(!p||p.guildId!==i.guildId)throw Error('Project not found.');
-  if(!media(i))throw Error('Media Team role required.');
-  if(action==='pickmanage'&&!management(i))throw Error('Management access required.');
+  if(action==='pickmine'&&!media(i))throw Error('Media Team role required.');
   if(action==='pickmine'&&p.creator!==i.user.id&&p.assignee!==i.user.id)throw Error('This is not your project.');
   if(action==='pickactive'&&(p.assignee!==i.user.id||!['not_started','in_progress','on_hold','changes_requested','awaiting_review'].includes(p.status)))throw Error('This project is no longer in your active list.');
   if(action==='pickdone'&&p.status!=='completed')throw Error('This is not a completed project.');
-  await componentReply(i,action==='pickmanage'?approvalCard(p,i.guild):smallCard(p,i.guild,p.assignee===i.user.id||management(i)),action==='pickmanage');
+  if(action==='pickmanage'&&['completed','denied','cancelled'].includes(p.status))throw Error('That project is no longer active.');
+  // Repaint the select menu without a default option, retaining its placeholder.
+  const newPicker=action==='pickmanage'?overviewPicker(i,id||'all'):
+   picker(i,action==='pickdone'?'completed':action==='pickactive'?'active':'mine');
+  await i.update({components:[newPicker]});
+  const readonly=action==='pickmanage'||action==='pickactive'||action==='pickdone';
+  await i.followUp({...sendPayload(smallCard(p,i.guild,!readonly && (p.assignee===i.user.id||management(i)))),flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral});
   return true;
  }
  const p=load().projects[action==='form'&&id!=='new'?bits[3]:id];if(!(action==='form'&&id==='new')&&(!p||p.guildId!==i.guildId))throw Error('Project not found.');
@@ -201,10 +225,10 @@ async function handleComponent(i){if(!i.customId?.startsWith('msrpm:'))return fa
   await defer(i);const s=load(),r=s.projects[id],expected=action==='approve'?'pending':'awaiting_review';if(r.status!==expected)throw Error('Project status has already changed.');if(!management(i))throw Error('Management permission required.');if(action==='approve'){r.status='not_started';log(r,i.user.id,'Project approved');}else{r.status='completed';r.reviewedBy=i.user.id;r.completedAt=Date.now();log(r,i.user.id,'Finished work accepted');}save(s);await sync(i,r);await i.editReply(action==='approve'?`Project #${id} approved and assigned to <@${r.assignee}>.`:`Project #${id} marked complete; permanent completion log updated.`);return true;
  }
  if(i.isStringSelectMenu()&&action==='selectstatus'){
-  if(p.assignee!==i.user.id&&!management(i))throw Error('Not your project.');if(['pending','denied','cancelled','completed','awaiting_review'].includes(p.status))throw Error('Project locked.');const next=i.values[0];if(!['not_started','in_progress','on_hold','cancelled'].includes(next))throw Error('Unknown status.');await defer(i);const s=load(),r=s.projects[id];if(['pending','denied','cancelled','completed','awaiting_review'].includes(r.status))throw Error('Project locked.');r.status=next;log(r,i.user.id,'Status changed to '+next);save(s);await sync(i,r);await i.editReply(`Project #${id} changed to **${status(next)}**.`);return true;
+  if(p.assignee!==i.user.id&&!management(i))throw Error('Not your project.');if(['pending','denied','cancelled','completed','awaiting_review'].includes(p.status))throw Error('Project locked.');const next=i.values[0];if(!['not_started','in_progress','on_hold','cancelled'].includes(next))throw Error('Unknown status.');await i.deferUpdate();const s=load(),r=s.projects[id];if(['pending','denied','cancelled','completed','awaiting_review'].includes(r.status))throw Error('Project locked.');r.status=next;log(r,i.user.id,'Status changed to '+next);save(s);await sync(i,r);await i.editReply({content:`Project #${id} changed to **${status(next)}**.`,components:[]});return true;
  }
  if(i.isUserSelectMenu()&&action==='selectuser'){
-  if(!management(i))throw Error('Media management role required.');if(['pending','denied','cancelled','completed','awaiting_review'].includes(p.status))throw Error('Project locked.');const target=await i.guild.members.fetch(i.values[0]);if(!Object.values(ROLES).some(r=>target.roles.cache.has(r))&&!target.permissions.has('Administrator'))throw Error('Please select a Media Team member.');await defer(i);const s=load(),r=s.projects[id];r.assignee=target.id;log(r,i.user.id,'Reassigned to '+target.id);save(s);await sync(i,r);await i.editReply(`Project #${id} assigned to <@${target.id}>.`);return true;
+  if(!management(i))throw Error('Media management role required.');if(['pending','denied','cancelled','completed','awaiting_review'].includes(p.status))throw Error('Project locked.');const target=await i.guild.members.fetch(i.values[0]);if(!Object.values(ROLES).some(r=>target.roles.cache.has(r))&&!target.permissions.has('Administrator'))throw Error('Please select a Media Team member.');await i.deferUpdate();const s=load(),r=s.projects[id];r.assignee=target.id;log(r,i.user.id,'Reassigned to '+target.id);save(s);await sync(i,r);await i.editReply({content:`Project #${id} assigned to <@${target.id}>.`,components:[]});return true;
  }
  if(i.isModalSubmit()&&action==='form'){
   const op=id,pid=bits[3],s=load(),r=s.projects[pid];if(!r||r.guildId!==i.guildId)throw Error('Project no longer exists.');const owner=r.assignee===i.user.id;
@@ -216,7 +240,7 @@ async function handleComponent(i){if(!i.customId?.startsWith('msrpm:'))return fa
    const title=i.fields.getTextInputValue('title').trim(),description=i.fields.getTextInputValue('description').trim(),type=i.fields.getStringSelectValues('type')[0],deadline=dateCheck(i.fields.getTextInputValue('deadline').trim()),notes=i.fields.getTextInputValue('notes')?.trim()||'';if(!title||!description||!TYPES.includes(type))throw Error('Missing project information.');await defer(i);Object.assign(r,{title,description,type,deadline,notes});log(r,i.user.id,'Project details edited');save(s);await sync(i,r);await i.editReply(`Project #${pid} details updated.`);return true;
   }
   if(op==='submit'){
-   const raw=i.fields.getTextInputValue('link')?.trim()||'',url=link(raw),note=i.fields.getTextInputValue('notes')?.trim()||'',up=Array.from(i.fields.getUploadedFiles('uploads',false)?.values()||[]);if(!url&&!up.length)throw Error('Please provide a finished-work link or attachment.');await defer(i);
+   const raw=i.fields.getTextInputValue('link')?.trim()||'',url=link(raw),note=i.fields.getTextInputValue('notes')?.trim()||'',up=Array.from(i.fields.getUploadedFiles('uploads',false)?.values()||[]);await defer(i);
    // Mirror uploaded files into the permanent approval log before storing their URLs.
    const c=await channel(i,APPROVAL_CHANNEL);const uploaded=[];if(up.length){const names=up.map((a,j)=>`msrpm-${pid}-${j+1}-${String(a.name).replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,60)}`);const attachmentMessage=await c.send({content:`Project #${pid} — submission attachments`,files:up.map((f,j)=>({attachment:f.url,name:names[j]})),allowedMentions:{parse:[]}});for(const f of attachmentMessage.attachments.values())uploaded.push({name:f.name,url:f.url});}
    r.submission={link:url,notes:note,files:uploaded,submittedBy:i.user.id,submittedAt:Date.now()};r.status='awaiting_review';log(r,i.user.id,'Submitted completed work for review');save(s);await sync(i,r);await i.editReply(`Project #${pid} submitted for management review.`);return true;
