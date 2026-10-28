@@ -18,6 +18,7 @@ const SUPPORT_STAFF_ROLE_ID = '1556203938427183105';
 const MEDIA_FORM_NAME = 'Media Staff';
 const MEDIA_REVIEW_CHANNEL_ID = '1564576335177719949';
 const HEAD_MEDIA_ROLE_ID = '1550808851538780160';
+const COMMUNICATIONS_DIRECTOR_ROLE_ID = '1556177802267590686';
 const TRIAL_MEDIA_ROLE_ID = '1550809222520770613';
 const DATA_DIR = __dirname;
 const FORMS_FILE = path.join(DATA_DIR, 'forms.runtime.json');
@@ -105,9 +106,9 @@ function isMediaForm(recordOrName) {
   return String(name||'').trim().toLowerCase()===MEDIA_FORM_NAME.toLowerCase();
 }
 function reviewChannel(record) { return isMediaForm(record)?MEDIA_REVIEW_CHANNEL_ID:REVIEW_CHANNEL_ID; }
-function reviewerRoles(record) { return isMediaForm(record)?[HEAD_MEDIA_ROLE_ID,FOUNDER_ROLE_ID]:[FOUNDER_ROLE_ID]; }
+function reviewerRoles(record) { return isMediaForm(record)?[HEAD_MEDIA_ROLE_ID]:[FOUNDER_ROLE_ID]; }
 function canReview(interaction,record) {
-  if (isMediaForm(record)) return [HEAD_MEDIA_ROLE_ID,FOUNDER_ROLE_ID].some(id=>interaction.member?.roles?.cache?.has(id));
+  if (isMediaForm(record)) return [HEAD_MEDIA_ROLE_ID,COMMUNICATIONS_DIRECTOR_ROLE_ID].some(id=>interaction.member?.roles?.cache?.has(id));
   return isFounder(interaction);
 }
 function isFounder(interaction) {
