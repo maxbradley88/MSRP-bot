@@ -60,11 +60,25 @@ function defaultForms() {
   ];
 }
 function getForms() {
-  const forms = readJson(FORMS_FILE, null);
-  if (!Array.isArray(forms)) return defaultForms();
-  const mediaLink=loadDashboard().applications?.mediaStaff;
-  if (mediaLink && !forms.some(f=>isMediaForm(f.name))) {
-    return [...forms,{name:MEDIA_FORM_NAME,link:mediaLink,roleId:TRIAL_MEDIA_ROLE_ID}];
+  const configured = readJson(FORMS_FILE, null);
+  const forms = Array.isArray(configured) ? configured : defaultForms();
+  // The Information Dashboard's /application-manage command stores its links
+  // independently. Its existing link must be usable by Google Forms intake too,
+  // even if forms.runtime.json already has an empty Media Staff entry.
+  const dashboardLinks = loadDashboard().applications || {};
+  for (const {name, key, roleId} of [
+    {name: 'Game Staff', key: 'gameStaff', roleId: GAME_STAFF_ROLE_ID},
+    {name: 'Support Staff', key: 'supportTeam', roleId: SUPPORT_STAFF_ROLE_ID},
+    {name: MEDIA_FORM_NAME, key: 'mediaStaff', roleId: TRIAL_MEDIA_ROLE_ID},
+  ]) {
+    const existing = forms.find(f => String(f.name || '').toLowerCase() === name.toLowerCase());
+    const dashboardLink = dashboardLinks[key];
+    if (!existing) {
+      if (dashboardLink) forms.push({name, link: dashboardLink, roleId});
+    } else if (!existing.link && dashboardLink) {
+      existing.link = dashboardLink;
+    }
+    if (existing && !existing.roleId) existing.roleId = roleId;
   }
   return forms;
 }
