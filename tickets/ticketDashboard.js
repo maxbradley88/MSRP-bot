@@ -61,13 +61,8 @@ function createTicketDashboard(iconMap) {
     const rulesButton = new ButtonBuilder()
         .setCustomId('ticket_rules')
         .setLabel(config.ticketRulesButton.label)
-        .setStyle(
-            ButtonStyle[config.ticketRulesButton.buttonColor]
-        )
-        .setEmoji({
-            id: iconMap.ticketRules.id,
-            name: iconMap.ticketRules.name
-        });
+        .setStyle(ButtonStyle[config.ticketRulesButton.buttonColor]);
+    if (iconMap?.ticketRules) rulesButton.setEmoji(iconMap.ticketRules);
 
 
     // ==========================================
@@ -79,11 +74,8 @@ console.log('INFORMATION ICON:', iconMap.information);
     const informationButton = new ButtonBuilder()
         .setLabel(config.informationButton.label)
         .setStyle(ButtonStyle.Link)
-        .setURL(`https://discord.com/channels/${config.guildId}/1547544258276364338`)
-        .setEmoji({
-            id: iconMap.information.id,
-            name: iconMap.information.name
-        });
+        .setURL(`https://discord.com/channels/${config.guildId}/1547544258276364338`);
+    if (iconMap?.information) informationButton.setEmoji(iconMap.information);
 
 
     // ==========================================

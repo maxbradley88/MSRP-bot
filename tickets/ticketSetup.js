@@ -121,7 +121,53 @@ async function execute(interaction) {
     }
 }
 
+const fs = require('node:fs');
+const path = require('node:path');
+const BULK_DATA_PATH = path.join(__dirname, 'ticketDashboard.runtime.json');
+async function refreshForBulk(guild) {
+    const channel = await guild.channels.fetch(config.supportChannelId);
+    if (!channel || typeof channel.send !== 'function') throw new Error('Support ticket dashboard channel unavailable.');
+    let messageId = null;
+    try { messageId = JSON.parse(fs.readFileSync(BULK_DATA_PATH,'utf8')).messageId; } catch (_) {}
+    let old = null;
+    if (messageId) {
+        try { old = await channel.messages.fetch(messageId); }
+        catch (error) { if (error.code !== 10008) throw error; }
+    }
+    // Legacy send-ticket-dashboard did not persist its message ID. Search only
+    // this channel for a message with the unique ticket_type_select component.
+    if (!old) {
+        const messages = await channel.messages.fetch({limit:100});
+        old = messages.find(m => m.author?.id === guild.client.user.id &&
+            JSON.stringify(m.components?.map(c=>c.toJSON?.() || c) || []).includes('ticket_type_select')) || null;
+    }
+    const {getTicketEmoji} = require('./ticketIcons');
+    const map = {};
+    for (const key of Object.keys(config.ticketTypes || {})) {
+        const emoji = getTicketEmoji(guild,key);
+        if (emoji) map[key] = emoji;
+    }
+    for (const key of ['ticketRules','information']) {
+        const emoji = getTicketEmoji(guild,key);
+        if (emoji) map[key] = emoji;
+    }
+    const applicationEmoji = guild.emojis.cache.find(e=>e.name==='msrp_applications');
+    if (applicationEmoji) map.applications = {id:applicationEmoji.id,name:applicationEmoji.name};
+    const payload = createTicketDashboard(map);
+    if (old) {
+        try {
+            await old.edit({...payload,attachments:[]});
+            fs.writeFileSync(BULK_DATA_PATH,JSON.stringify({channelId:channel.id,messageId:old.id},null,2));
+            return {action:'updated',url:old.url};
+        } catch (error) { if (error.code !== 10008) throw error; }
+    }
+    const sent = await channel.send(payload);
+    fs.writeFileSync(BULK_DATA_PATH,JSON.stringify({channelId:channel.id,messageId:sent.id},null,2));
+    return {action:'created',url:sent.url};
+}
+
 module.exports = {
+    refreshForBulk,
     command,
     execute
 };

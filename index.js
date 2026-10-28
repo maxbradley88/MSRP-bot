@@ -39,12 +39,6 @@ const {
 
 const { createTicket } = require('./tickets/ticketCreate');
 
-const ticketSetup = require('./tickets/ticketSetup');
-const sendTicketDashboardCommand =
-    new SlashCommandBuilder()
-        .setName('send-ticket-dashboard')
-        .setDescription('Sends the ticket dashboard.');
-
 const config = require('./tickets/ticketConfig');
 const { handleTicketHandoffInteraction } = require('./tickets/ticketHandoff');
 const ticketState = require('./tickets/ticketState');
@@ -58,9 +52,6 @@ const {
 
 const reactionRole =
     require('./reactionRoles/reactionRole');
-
-const sessionDashboardCommand =
-    require('./sessions/sessionDashboardCommand');
 
 const sessionTimesCommand =
     require('./sessions/sessionTimesCommand');
@@ -103,6 +94,7 @@ const {
 
 const mainDashboard = require('./mainDashboard/dashboardSystem');
 const mediaSystem = require('./media/mediaSystem');
+const dashboardUpdater = require('./dashboards/updateAll');
 const eventSystem = require('./events/eventSystem');
 const giveawaySystem = require('./giveaways/giveawaySystem');
 const infractionSystem = require('./infractions/infractionSystem');
@@ -1391,9 +1383,7 @@ client.once(
                 await rest.put(
                     Routes.applicationGuildCommands(client.user.id, process.env.DISCORD_GUILD_ID),
                     { body: [
-    sendTicketDashboardCommand.toJSON(),
-    sessionDashboardCommand.data.toJSON(),
-    roleBindingSystem.command.toJSON(),
+    dashboardUpdater.command.toJSON(),
     sessionTimesCommand.data.toJSON(),
     sessionVoteCommand.data.toJSON(),
     sessionCancelVoteCommand.data.toJSON(),
@@ -1401,18 +1391,15 @@ client.once(
     sessionShutdownCommand.data.toJSON(),
     sessionShutdownCommand.forceData.toJSON(),
     reactionRole.command.toJSON(),
-    ...mainDashboard.commands.map(command => command.toJSON()),
-    mediaSystem.command.toJSON(),
+    ...mainDashboard.commands.filter(c => c.name !== 'send-dashboard').map(command => command.toJSON()),
     ...eventSystem.commands.map(command => command.toJSON()),
     giveawaySystem.command.toJSON(),
     ...infractionSystem.commands.map(command => command.toJSON()),
     promotionSystem.command.toJSON(),
     reviewSystem.command.toJSON(),
-    ...staffDashboard.commands.map(command => command.toJSON()),
+    ...staffDashboard.commands.filter(c => c.name !== 'send-staff-dashboard').map(command => command.toJSON()),
     resignationSystem.command.toJSON(),
-    trainingSystem.command.toJSON(),
     trainingSystem.hostCommand.toJSON(),
-    trainingSystem.resultDashboardCommand.toJSON(),
     formReviewSystem.formManageCommand.toJSON()
 ] }
                 );
@@ -1504,6 +1491,39 @@ client.on(
 );
 
 
+// Live application bridge and reaction-role listeners must be registered once,
+// not during interactionCreate; otherwise ordinary commands can prevent them
+// from registering and startup recovery becomes the only application importer.
+client.on('messageCreate', message => {
+    if (message.webhookId && message.webhookId === process.env.MSRP_FORMS_WEBHOOK_ID) {
+        console.log('[APPLICATIONS] Live webhook event received:', message.id);
+    }
+    void formReviewSystem.handleIncoming(message).catch(error => {
+        console.error('[APPLICATIONS] Submission listener error:', error);
+    });
+});
+
+client.on(
+    'messageReactionAdd',
+    async (reaction, user) => {
+        await reactionRole.handleReactionAdd(
+            reaction,
+            user
+        );
+    }
+);
+
+
+client.on(
+    'messageReactionRemove',
+    async (reaction, user) => {
+        await reactionRole.handleReactionRemove(
+            reaction,
+            user
+        );
+    }
+);
+
 // ======================================================
 
 // INTERACTIONS
@@ -1572,6 +1592,8 @@ if (
 
 
 
+    if (await dashboardUpdater.handleCommand(interaction)) return;
+
     if (await infractionSystem.handleCommand(interaction)) return;
 
     if (await promotionSystem.handleCommand(interaction)) return;
@@ -1606,39 +1628,6 @@ if (
 
     return;
 }
-
-    if (
-        interaction.commandName ===
-        'send-ticket-dashboard'
-    ) {
-        await ticketSetup.execute(
-            interaction
-        );
-
-        return;
-    }
-
-    if (
-        interaction.commandName ===
-        'send-session-dashboard'
-    ) {
-        await sessionDashboardCommand.execute(
-            interaction
-        );
-
-        return;
-    }
-
-    if (
-        interaction.commandName ===
-        'send-role-dashboard'
-    ) {
-        await roleBindingSystem.executeDashboard(
-            interaction
-        );
-
-        return;
-    }
 
     if (
         interaction.commandName ===
@@ -1704,35 +1693,6 @@ if (
 }
 
 
-client.on('messageCreate', message => {
-    if (message.webhookId && message.webhookId === process.env.MSRP_FORMS_WEBHOOK_ID) {
-        console.log('[APPLICATIONS] Live webhook event received:', message.id);
-    }
-    void formReviewSystem.handleIncoming(message).catch(error => {
-        console.error('[APPLICATIONS] Submission listener error:', error);
-    });
-});
-
-client.on(
-    'messageReactionAdd',
-    async (reaction, user) => {
-        await reactionRole.handleReactionAdd(
-            reaction,
-            user
-        );
-    }
-);
-
-
-client.on(
-    'messageReactionRemove',
-    async (reaction, user) => {
-        await reactionRole.handleReactionRemove(
-            reaction,
-            user
-        );
-    }
-);
 
             // ==================================================
             // EVENT SYSTEM

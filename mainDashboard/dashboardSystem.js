@@ -1019,7 +1019,7 @@ async function refreshForBulk(guild) {
         catch (error) { if (error.code !== 10008) throw error; }
     }
     if (message) {
-        try { await message.edit(payload); return {action:'updated',url:message.url}; }
+        try { await message.edit({...payload, attachments: []}); return {action:'updated',url:message.url}; }
         catch (error) { if (error.code !== 10008) throw error; }
     }
     const sent = await channel.send(payload);

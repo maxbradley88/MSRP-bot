@@ -95,7 +95,7 @@ function dateCheck(value){const match=/^(\d{2})\/(\d{2})\/(\d{2}|\d{4})$/.exec(v
 function link(s){return String(s??'').trim().slice(0,900);}
 function log(p,actor,event){(p.history??=[]).push({at:Date.now(),by:actor,event});p.updatedAt=Date.now();}
 async function channel(i,id){const c=await i.guild.channels.fetch(id);if(!c||!c.isTextBased()||typeof c.send!=='function')throw Error('Media channel unavailable or bot cannot post there.');return c;}
-async function sync(i,p){if(!p.approvalMessageId)return;try{const c=await channel(i,APPROVAL_CHANNEL);const m=await c.messages.fetch(p.approvalMessageId);await m.edit(sendPayload(approvalCard(p,i.guild),{banner:true}));}catch(e){console.error('[MEDIA] Failed to refresh project #'+p.id,e);throw new Error('Project saved, but its management message could not be refreshed. Check channel permissions.');}}
+async function sync(i,p){if(!p.approvalMessageId)return;try{const c=await channel(i,APPROVAL_CHANNEL);const m=await c.messages.fetch(p.approvalMessageId);await m.edit({...sendPayload(approvalCard(p,i.guild),{banner:true}),attachments:[]});}catch(e){console.error('[MEDIA] Failed to refresh project #'+p.id,e);throw new Error('Project saved, but its management message could not be refreshed. Check channel permissions.');}}
 // Short, unbranded notices make updated projects easy to find without duplicating their full logs.
 async function postProjectNotice(i,p,kind){
  try{
@@ -185,7 +185,7 @@ async function resetDashboardMenu(i){
  try{if(i.message?.edit)await i.message.edit({components:[cards(i.guild)]});}
  catch(e){console.warn('[MEDIA PROJECTS] Could not reset dashboard dropdown:',e.message);}
 }
-async function handleCommand(i){if(!i.isChatInputCommand()||i.commandName!==command.name)return false;if(!management(i)){await respond(i,'Foundership or Media management permission required.');return true;}await defer(i);try{const c=await channel(i,PROJECT_CHANNEL),s=load();let msg;if(s.dashboard?.messageId){try{const existing=await c.messages.fetch(s.dashboard.messageId);msg=await existing.edit(sendPayload(cards(i.guild),{banner:true}));}catch(e){if(![10008,10003].includes(e.code))throw e;}}if(!msg)msg=await c.send(sendPayload(cards(i.guild),{banner:true}));s.dashboard={messageId:msg.id,channelId:c.id};save(s);await i.editReply(`Media Project Manager ready: ${msg.url}`);}catch(e){await i.editReply(`Unable to post dashboard: ${e.message}`);}return true;}
+async function handleCommand(i){if(!i.isChatInputCommand()||i.commandName!==command.name)return false;if(!management(i)){await respond(i,'Foundership or Media management permission required.');return true;}await defer(i);try{const c=await channel(i,PROJECT_CHANNEL),s=load();let msg;if(s.dashboard?.messageId){try{const existing=await c.messages.fetch(s.dashboard.messageId);msg=await existing.edit({...sendPayload(cards(i.guild),{banner:true}),attachments:[]});}catch(e){if(![10008,10003].includes(e.code))throw e;}}if(!msg)msg=await c.send(sendPayload(cards(i.guild),{banner:true}));s.dashboard={messageId:msg.id,channelId:c.id};save(s);await i.editReply(`Media Project Manager ready: ${msg.url}`);}catch(e){await i.editReply(`Unable to post dashboard: ${e.message}`);}return true;}
 async function handleComponent(i){if(!i.customId?.startsWith('msrpm:'))return false;if(!i.guild){await respond(i,'Server only.');return true;}
  const bits=i.customId.split(':'),action=bits[1],id=bits[2];
  try{
@@ -310,7 +310,7 @@ async function refreshForBulk(guild) {
  }
  const payload = sendPayload(cards(guild), {banner:true});
  if (message) {
-  try { await message.edit(payload); return {action:'updated',url:message.url}; }
+  try { await message.edit({...payload,attachments:[]}); return {action:'updated',url:message.url}; }
   catch (error) { if (error.code !== 10008) throw error; }
  }
  message = await c.send(payload);

@@ -649,4 +649,32 @@ function registerAnnouncements(client) {
     } catch (e) { console.error('[TRAINING] Announcement relay failed:', e); }
   });
 }
-module.exports = { command, hostCommand, resultDashboardCommand, handleCommand, handleComponent, registerAnnouncements };
+async function refreshForBulk(guild) {
+ const data = load();
+ const results = [];
+ for (const item of [
+   {name:'Training Requests',channelId:DASHBOARD_CHANNEL,idKey:'dashboardId',render:dashboard},
+   {name:'Training Results',channelId:RESULTS_DASHBOARD_CHANNEL,idKey:'resultDashboardId',render:resultsDashboard}
+ ]) {
+   try {
+     const channel = await guild.channels.fetch(item.channelId);
+     if (!channel || typeof channel.send !== 'function') throw Error('Channel unavailable.');
+     let msg = null;
+     if (data[item.idKey]) {
+       try { msg = await channel.messages.fetch(data[item.idKey]); }
+       catch (e) { if (e.code !== 10008) throw e; }
+     }
+     const payload = {components:[item.render(guild)],files:files(),flags:MessageFlags.IsComponentsV2,allowedMentions:{parse:[]}};
+     if (msg) {
+       try { await msg.edit({...payload,attachments:[]}); }
+       catch (e) { if (e.code !== 10008) throw e; msg = null; }
+     }
+     const action = msg ? 'updated' : 'created';
+     if (!msg) msg = await channel.send(payload);
+     if (data[item.idKey] !== msg.id) { data[item.idKey] = msg.id; save(data); }
+     results.push({name:item.name,action,url:msg.url});
+   } catch (error) { results.push({name:item.name,action:'failed',reason:error.message}); }
+ }
+ return results;
+}
+module.exports = { command, hostCommand, resultDashboardCommand, handleCommand, handleComponent, registerAnnouncements, refreshForBulk };

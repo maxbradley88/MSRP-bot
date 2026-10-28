@@ -5,9 +5,7 @@ const SESSION_CONTROL_ROLE_ID = '1548126738876342272';
 const EVENT_TEAM_ROLE_ID = '1558396994601615460';
 
 const commandPermissions = {
-    'send-ticket-dashboard': [FOUNDERSHIP_ROLE_ID],
-    'send-session-dashboard': [FOUNDERSHIP_ROLE_ID],
-    'send-role-dashboard': ['1556177802267590686'],
+    'update-server-dashboards': [FOUNDERSHIP_ROLE_ID],
     'set-session-times': [FOUNDERSHIP_ROLE_ID],
     'reaction-role-message': [FOUNDERSHIP_ROLE_ID],
 
@@ -18,7 +16,6 @@ const commandPermissions = {
     'force-shutdown': [SESSION_CONTROL_ROLE_ID],
 
     // Main dashboard configuration
-    'send-dashboard': [FOUNDERSHIP_ROLE_ID],
     'add-dashboard-role': [FOUNDERSHIP_ROLE_ID],
     'remove-dashboard-role': [FOUNDERSHIP_ROLE_ID],
     'config-partnership-conditions': [FOUNDERSHIP_ROLE_ID],
@@ -29,7 +26,6 @@ const commandPermissions = {
     'partnership-remove': [FOUNDERSHIP_ROLE_ID],
     'application-manage': [FOUNDERSHIP_ROLE_ID],
     'form-manage': [FOUNDERSHIP_ROLE_ID],
-    'send-media-dashboard': [FOUNDERSHIP_ROLE_ID, '1550808851538780160', '1564210385903419503'],
     'coc-team-add': [FOUNDERSHIP_ROLE_ID],
     'coc-team-remove': [FOUNDERSHIP_ROLE_ID],
 
@@ -41,12 +37,9 @@ const commandPermissions = {
     'promote': ['1547535121320779796', '1547525713853288448', '1547536815475396668'],
     // Anyone may submit a review, but the review handler restricts the channel.
     'review': [],
-    'send-staff-dashboard': [FOUNDERSHIP_ROLE_ID],
     'add-staff-guide': [FOUNDERSHIP_ROLE_ID],
     'remove-staff-guide': [FOUNDERSHIP_ROLE_ID],
-    'send-request-dashboard': [FOUNDERSHIP_ROLE_ID],
     'host-training': ['1547543294056333323'],
-    'send-result-dashboard': [FOUNDERSHIP_ROLE_ID],
     'resignation-log': ['1547535121320779796', FOUNDERSHIP_ROLE_ID]
 };
 
@@ -61,14 +54,6 @@ function canUseCommand(interaction) {
     if (!Object.prototype.hasOwnProperty.call(commandPermissions, commandName)) {
         console.warn(`[COMMAND PERMISSIONS] ${commandName} is not configured.`);
         return false;
-    }
-
-    // Role binding management is exclusively available to this role.
-    // Administrator and higher-ranking roles do not bypass this restriction.
-    if (commandName === 'send-role-dashboard') {
-        const roles = interaction.member?.roles;
-        return Boolean(roles?.cache?.has('1556177802267590686') ||
-            (Array.isArray(roles) && roles.includes('1556177802267590686')));
     }
 
     const allowedRoles = commandPermissions[commandName];

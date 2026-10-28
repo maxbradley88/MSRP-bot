@@ -456,7 +456,31 @@ async function handleDisplayButton(interaction) {
     return true;
 }
 
+async function refreshForBulk(client) {
+    const state = getState();
+    const channelId = state.dashboardChannelId || process.env.MSRP_SESSION_DASHBOARD_CHANNEL_ID;
+    if (!channelId) return {action:'skipped',reason:'No saved Session Dashboard channel; set MSRP_SESSION_DASHBOARD_CHANNEL_ID once to initialise.'};
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || typeof channel.send !== 'function') throw new Error('Saved session channel unavailable.');
+    if (state.dashboardMessageId) {
+        const old = await channel.messages.fetch(state.dashboardMessageId).catch(error => {
+            if (error.code === 10008) return null;
+            throw error;
+        });
+        if (old) {
+            const payload = await buildSessionDashboard({guild:channel.guild, liveData:getCachedDashboardData()});
+            try {
+                await old.edit({...payload,flags:MessageFlags.IsComponentsV2,attachments:[]});
+                return {action:'updated',url:old.url};
+            } catch (error) { if (error.code !== 10008) throw error; }
+        }
+    }
+    const sent = await sendSessionDashboard(channel);
+    return {action:'created',url:sent.url};
+}
+
 module.exports = {
+    refreshForBulk,
     buildSessionDashboard,
     sendSessionDashboard,
     refreshSessionDashboard,
