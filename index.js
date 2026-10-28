@@ -95,6 +95,7 @@ const {
 const mainDashboard = require('./mainDashboard/dashboardSystem');
 const mediaSystem = require('./media/mediaSystem');
 const dashboardUpdater = require('./dashboards/updateAll');
+const stickyMessages = require('./announcements/stickyMessages');
 const eventSystem = require('./events/eventSystem');
 const giveawaySystem = require('./giveaways/giveawaySystem');
 const infractionSystem = require('./infractions/infractionSystem');
@@ -144,6 +145,7 @@ client.rest.on('rateLimited', info => {
 
 require('./messages/sendMessage')(client);
 require('./announcements/announcementRelay')(client);
+stickyMessages.register(client);
 trainingSystem.registerAnnouncements(client);
 
 const activeClaimChannels = new Set();
@@ -1384,6 +1386,7 @@ client.once(
                     Routes.applicationGuildCommands(client.user.id, process.env.DISCORD_GUILD_ID),
                     { body: [
     dashboardUpdater.command.toJSON(),
+    stickyMessages.command.toJSON(),
     sessionTimesCommand.data.toJSON(),
     sessionVoteCommand.data.toJSON(),
     sessionCancelVoteCommand.data.toJSON(),
@@ -1593,6 +1596,7 @@ if (
 
 
     if (await dashboardUpdater.handleCommand(interaction)) return;
+    if (await stickyMessages.handleCommand(interaction)) return;
 
     if (await infractionSystem.handleCommand(interaction)) return;
 

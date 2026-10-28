@@ -6,6 +6,7 @@ const EVENT_TEAM_ROLE_ID = '1558396994601615460';
 
 const commandPermissions = {
     'update-server-dashboards': [FOUNDERSHIP_ROLE_ID],
+    'sticky-message': [FOUNDERSHIP_ROLE_ID],
     'set-session-times': [FOUNDERSHIP_ROLE_ID],
     'reaction-role-message': [FOUNDERSHIP_ROLE_ID],
 
