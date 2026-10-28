@@ -3,7 +3,7 @@
 const {
   PermissionFlagsBits, MessageFlags,
   ContainerBuilder, TextDisplayBuilder, SeparatorBuilder,
-  MediaGalleryBuilder, MediaGalleryItemBuilder, FileBuilder,
+  MediaGalleryBuilder, MediaGalleryItemBuilder,
 } = require('discord.js');
 
 const ANNOUNCEMENTS_CHANNEL_IDS = new Set([
@@ -12,93 +12,55 @@ const ANNOUNCEMENTS_CHANNEL_IDS = new Set([
 ]);
 const MEDIA_ONLY_CHANNEL_ID = '1564917954854780938';
 
-const MEDIA_EXT = /\.(?:png|jpe?g|gif|webp|avif|mp4|webm|mov)(?:[?#]|$)/i;
+// Accept exactly one uploaded image or video per message. No URLs, captions,
+// miscellaneous files, stickers, or multi-attachment messages.
+const MEDIA_EXT = /\.(?:png|jpe?g|gif|webp|avif|mp4|webm|mov)$/i;
 const MEDIA_TYPES = /^(?:image|video)\//i;
-const URL_TOKEN = /^https?:\/\/\S+$/i;
 
-function cleanUrl(token) {
-  return token.replace(/[),.;!?]+$/g, '');
-}
-
-function getUrls(content) {
-  const tokens = (content || '').trim().split(/\s+/).filter(Boolean);
-  if (!tokens.length) return [];
-  const urls = tokens.map(cleanUrl);
-  if (!urls.every(u => URL_TOKEN.test(u))) return null;
-  if (urls.length > 15) return null;
-  try {
-    urls.forEach(u => {
-      const parsed = new URL(u);
-      if (!['http:', 'https:'].includes(parsed.protocol)) throw Error('Invalid protocol');
-    });
-    return urls;
-  } catch {
-    return null;
-  }
+async function rejectMedia(message) {
+  await message.delete().catch(error => console.error('[MEDIA CHANNEL] Could not remove invalid post:', error));
+  await message.author.send(
+    'Your post in the media channel was removed. Please upload exactly one image or video per message, with no links, captions, or other attachments.'
+  ).catch(() => {});
 }
 
 async function repostMedia(message) {
-  const urls = getUrls(message.content);
   const attachments = [...message.attachments.values()];
-  // Only standalone URLs and/or attachments are permitted. Do not accept captions or other text.
-  if (urls === null || (!urls.length && !attachments.length)) {
-    await message.delete().catch(e => console.error('[MEDIA CHANNEL] Could not remove invalid post:', e));
-    await message.author.send('Your post in the media channel was removed. Please send only links, images, videos or attachments (without extra text).')
-      .catch(() => {});
+  const noText = !message.content?.trim();
+  const oneAttachment = attachments.length === 1;
+  const noOtherMedia = !message.stickers?.size;
+  const attachment = attachments[0];
+  // Require a recognised media MIME type or filename extension, and do not
+  // let a non-media MIME type pass merely because its filename looks like an image.
+  const contentType = attachment?.contentType || '';
+  const validType = MEDIA_TYPES.test(contentType) ||
+    (!contentType && MEDIA_EXT.test(attachment?.name || ''));
+
+  if (!noText || !oneAttachment || !noOtherMedia || !validType) {
+    await rejectMedia(message);
     return;
   }
 
-  const container = new ContainerBuilder(); // No accent colour.
-  const gallery = [];
-  const textLinks = [];
-  const files = [];
-  const fileComponents = [];
+  const filename = `media-${message.id}-${(attachment.name || 'upload').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 75)}`;
+  const container = new ContainerBuilder()
+    .addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(
+        new MediaGalleryItemBuilder().setURL(`attachment://${filename}`)
+      )
+    )
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`-# Credits: <@${message.author.id}>`)
+    );
 
-  // Remote web links are rendered as media if they point directly to images or videos.
-  // Site pages (such as youtube.com/watch) stay clickable links, not inline players.
-  for (const url of urls) {
-    if (MEDIA_EXT.test(url) && gallery.length < 10) {
-      gallery.push(new MediaGalleryItemBuilder().setURL(url));
-    } else {
-      textLinks.push(url);
-    }
-  }
-
-  // Files must be explicitly referenced by a Components V2 gallery/file component.
-  for (let i = 0; i < attachments.length; i++) {
-    const att = attachments[i];
-    const filename = `media-${i}-${(att.name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 75)}`;
-    if (MEDIA_TYPES.test(att.contentType || '') || MEDIA_EXT.test(att.name || '')) {
-      if (gallery.length < 10) {
-        files.push({ attachment: att.url, name: filename });
-        gallery.push(new MediaGalleryItemBuilder().setURL(`attachment://${filename}`));
-        continue;
-      }
-    }
-    files.push({ attachment: att.url, name: filename });
-    fileComponents.push(new FileBuilder().setURL(`attachment://${filename}`));
-  }
-
-  if (gallery.length) {
-    container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(...gallery));
-  }
-  if (textLinks.length) {
-    // Each URL remains visible and clickable; no raw top-level content in Components V2.
-    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(textLinks.join('\n')));
-  }
-  for (const file of fileComponents) container.addFileComponents(file);
-  container.addSeparatorComponents(new SeparatorBuilder());
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`-# Credits: <@${message.author.id}>`)
-  );
-
+  // If sending fails, keep the original upload rather than losing the media.
   await message.channel.send({
     components: [container],
-    files,
+    files: [{ attachment: attachment.url, name: filename }],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: { users: [message.author.id], roles: [], repliedUser: false },
   });
-  await message.delete().catch(e => console.error('[MEDIA CHANNEL] Reposted but original could not be deleted:', e));
+  await message.delete().catch(error => console.error('[MEDIA CHANNEL] Reposted but original could not be deleted:', error));
 }
 
 module.exports = function registerAnnouncementRelay(client) {

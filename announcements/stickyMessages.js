@@ -37,16 +37,37 @@ async function refresh(client,id,force=false) {
   const p=channel.permissionsFor(me);
   if(![PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ManageMessages,PermissionFlagsBits.ReadMessageHistory].every(x=>p?.has(x))) {console.warn('[STICKY] Missing channel permissions:',id);return false;}
   if(!force&&s.messageId){const last=(await channel.messages.fetch({limit:1})).first();if(last?.id===s.messageId)return true;}
+  if(state[id]!==s)return false;
   const old=s.messageId;
   const msg=await channel.send(payload(s));
+  if(state[id]!==s){await msg.delete().catch(()=>{});return false;}
   s.messageId=msg.id;save();posted=true;
   if(old&&old!==msg.id)await channel.messages.delete(old).catch(e=>{if(e.code!==10008)console.warn('[STICKY] Old message delete failed',e);});
  }catch(e){console.error('[STICKY] Update failed:',e);}
  finally {running.delete(id);if(reruns.delete(id))queue(client,id);}
  return posted;
 }
+function disableIfDeleted(channelId, messageId) {
+ const current = state[channelId];
+ if (!current || !current.messageId || current.messageId !== messageId) return;
+ // A manually deleted *current* sticky disables that channel permanently.
+ // Old stickies deleted by refresh are ignored because their IDs no longer match.
+ delete state[channelId];
+ clearTimeout(timers.get(channelId));
+ timers.delete(channelId);
+ reruns.delete(channelId);
+ try { save(); console.log('[STICKY] Disabled after sticky message was deleted:', channelId); }
+ catch (e) { console.error('[STICKY] Could not save removal:', e); }
+}
 function register(client){
  client.on('messageCreate',m=>{if(!m.guild||!state[m.channelId]||m.id===state[m.channelId].messageId)return;queue(client,m.channelId);});
+ // Cached deletions, including manual deletion in Discord.
+ client.on('messageDelete',m=>{if(m.guildId)disableIfDeleted(m.channelId,m.id);});
+ // Uncached deletions: sticky messages may have fallen out of the Discord.js cache.
+ client.on('raw',packet=>{
+  if(packet.t==='MESSAGE_DELETE')disableIfDeleted(packet.d.channel_id,packet.d.id);
+  if(packet.t==='MESSAGE_DELETE_BULK')for(const id of packet.d.ids||[])disableIfDeleted(packet.d.channel_id,id);
+ });
  client.once('clientReady',()=>{for(const id of Object.keys(state))queue(client,id);});
 }
 async function handleCommand(interaction){
