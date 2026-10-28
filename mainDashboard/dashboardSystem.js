@@ -172,6 +172,20 @@ const commands = [
             .setMaxLength(500)),
 
     new SlashCommandBuilder()
+        .setName('server-advert-manage')
+        .setDescription('Set or replace the MSRP server advert.')
+        .addStringOption(option => option.setName('advert').setDescription('Advert text (replaces the previous advert).').setRequired(true).setMaxLength(4000)),
+
+    new SlashCommandBuilder()
+        .setName('social-media-manage')
+        .setDescription('Add, remove or update social media links.')
+        .addStringOption(option => option.setName('manage').setDescription('Action to perform.').setRequired(true).addChoices(
+            { name: 'Add', value: 'add' }, { name: 'Remove', value: 'remove' }, { name: 'Update', value: 'update' }
+        ))
+        .addStringOption(option => option.setName('type').setDescription('Platform name (autocomplete for remove/update).').setRequired(true).setAutocomplete(true).setMaxLength(80))
+        .addStringOption(option => option.setName('link').setDescription('URL for add/update; leave blank for remove.').setMaxLength(500)),
+
+    new SlashCommandBuilder()
         .setName('coc-team-add')
         .setDescription('Adds a team to the Chain of Command message.')
         .addStringOption(option => option
@@ -241,7 +255,10 @@ function buildMainDashboard(icons) {
                 .setValue('departments'), icons.departments),
             applyEmoji(new StringSelectMenuOptionBuilder()
                 .setLabel('Partnerships')
-                .setValue('partnerships'), icons.partnership)
+                .setValue('partnerships'), icons.partnership),
+            applyEmoji(new StringSelectMenuOptionBuilder()
+                .setLabel('Social Media')
+                .setValue('social-media'), icons.socialMedia)
         );
 
     const applicationsMenu = new StringSelectMenuBuilder()
@@ -272,6 +289,8 @@ function buildMainDashboard(icons) {
         icons.partnership
     );
 
+    const advertButton = applyEmoji(new ButtonBuilder().setCustomId('main_dash_advert').setLabel('MSRP Advert').setStyle(ButtonStyle.Secondary), icons.applications);
+
     return new ContainerBuilder()
         .addMediaGalleryComponents(
             new MediaGalleryBuilder().addItems(
@@ -280,7 +299,7 @@ function buildMainDashboard(icons) {
         )
         .addSeparatorComponents(new SeparatorBuilder())
         .addActionRowComponents(
-            new ActionRowBuilder().addComponents(notifications, conditions)
+            new ActionRowBuilder().addComponents(notifications, conditions, advertButton)
         )
         .addSeparatorComponents(new SeparatorBuilder())
         .addActionRowComponents(
@@ -352,6 +371,40 @@ function addTextBlocks(container, text) {
 
 async function executeCommand(interaction) {
     const data = loadData();
+
+    if (interaction.commandName === 'server-advert-manage') {
+        const advert = interaction.options.getString('advert', true).trim();
+        if (!advert) { await interaction.reply({content: '❌ Advert cannot be empty.', flags: MessageFlags.Ephemeral}); return true; }
+        data.serverAdvert = advert;
+        saveData(data);
+        await interaction.reply({content: '✅ MSRP server advert saved. The dashboard button will show the latest version.', flags: MessageFlags.Ephemeral});
+        return true;
+    }
+
+    if (interaction.commandName === 'social-media-manage') {
+        const action = interaction.options.getString('manage', true);
+        const name = interaction.options.getString('type', true).trim();
+        const rawLink = interaction.options.getString('link');
+        const link = safeUrl(rawLink);
+        const socials = Array.isArray(data.socialMedia) ? data.socialMedia : [];
+        const current = socials.find(v => v.name.toLowerCase() === name.toLowerCase() || v.id === name);
+        if (action === 'add' && current) {
+            await interaction.reply({content: '❌ That social media type already exists. Choose Update instead.', flags: MessageFlags.Ephemeral}); return true;
+        }
+        if (action !== 'add' && !current) {
+            await interaction.reply({content: '❌ That social media type was not found.', flags: MessageFlags.Ephemeral}); return true;
+        }
+        if (action !== 'remove' && !link) {
+            await interaction.reply({content: '❌ Add or Update requires a valid https:// or http:// link.', flags: MessageFlags.Ephemeral}); return true;
+        }
+        if (action === 'add') socials.push({id: makeId('social'), name, link});
+        else if (action === 'update') current.link = link;
+        else data.socialMedia = socials.filter(v => v.id !== current.id);
+        if (action !== 'remove') data.socialMedia = socials;
+        saveData(data);
+        await interaction.reply({content: `✅ Social media ${action} successful: **${action === 'add' ? name : current.name}**.`, flags: MessageFlags.Ephemeral});
+        return true;
+    }
 
     if (interaction.commandName === 'send-dashboard') {
         const icons = await ensureDashboardIcons(interaction.guild);
@@ -572,6 +625,13 @@ async function handleAutocomplete(interaction) {
     const data = loadData();
     const focused = interaction.options.getFocused().toLowerCase();
     let items = null;
+
+    if (interaction.commandName === 'social-media-manage') {
+        const action = interaction.options.getString('manage');
+        const items = (loadData().socialMedia || []).filter(v => v.name.toLowerCase().includes(focused)).slice(0, 25);
+        await interaction.respond(action === 'add' ? [] : items.map(v => ({name: v.name, value: v.id})));
+        return true;
+    }
 
     if (interaction.commandName === 'remove-dashboard-role') {
         items = data.notificationRoles;
@@ -956,6 +1016,60 @@ async function toggleNotification(interaction, id) {
     }
 }
 
+
+async function showServerAdvert(interaction) {
+    const advert = loadData().serverAdvert || '*A server advert has not been configured yet.*';
+    const container = new ContainerBuilder()
+        .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
+        .addSeparatorComponents(new SeparatorBuilder());
+    addTextBlocks(container, advert);
+    container.addSeparatorComponents(new SeparatorBuilder())
+        .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
+    await interaction.reply({ ...componentsReply(container), files: attachmentFiles() });
+}
+
+function socialListContainer(page = 0) {
+    const socials = (loadData().socialMedia || []);
+    const pageSize = 20;
+    const maxPage = Math.max(0, Math.ceil(socials.length / pageSize) - 1);
+    const currentPage = Math.max(0, Math.min(page, maxPage));
+    const visible = socials.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+    const container = new ContainerBuilder()
+        .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://ticket-dashboard.png')))
+        .addSeparatorComponents(new SeparatorBuilder());
+    if (!visible.length) container.addTextDisplayComponents(new TextDisplayBuilder().setContent('*No social media links have been configured yet.*'));
+    for (let i = 0; i < visible.length; i += 5) {
+        const buttons = visible.slice(i, i + 5).map(v => new ButtonBuilder().setCustomId(`main_dash_social:${v.id}`).setLabel(v.name.slice(0, 80)).setStyle(ButtonStyle.Secondary));
+        container.addActionRowComponents(new ActionRowBuilder().addComponents(...buttons));
+    }
+    if (maxPage) {
+        container.addActionRowComponents(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`main_dash_social_page:${currentPage - 1}`).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(currentPage === 0),
+            new ButtonBuilder().setCustomId(`main_dash_social_page:${currentPage + 1}`).setLabel(`Page ${currentPage + 1} / ${maxPage + 1} · Next`).setStyle(ButtonStyle.Secondary).setDisabled(currentPage === maxPage)
+        ));
+    }
+    container.addSeparatorComponents(new SeparatorBuilder())
+        .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
+    return container;
+}
+
+async function showSocialMedia(interaction) {
+    await interaction.reply({ ...componentsReply(socialListContainer()), files: attachmentFiles() });
+}
+
+async function openSocialMedia(interaction, id) {
+    const social = (loadData().socialMedia || []).find(v => v.id === id);
+    if (!social) {
+        await interaction.update({content: '❌ This social media link was removed.', components: [], attachments: []});
+        return;
+    }
+    const container = new ContainerBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## Check us out!\n\n**${social.name.replace(/[\*\`_~|<>]/g, '')}:** ${social.link}`))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL('attachment://image.png')));
+    await interaction.update({components: [container], files: bottomImageOnly(), attachments: [], allowedMentions: {parse: []}});
+}
+
 async function resetMainDropdown(interaction, icons) {
     try {
         if (interaction.message?.edit) await interaction.message.edit({components:[buildMainDashboard(icons)]});
@@ -973,6 +1087,9 @@ async function handleInteraction(interaction) {
     if (interaction.isButton()) {
         if (customId === 'main_dash_notifications') await showNotifications(interaction, icons);
         else if (customId === 'main_dash_conditions') await showConditions(interaction);
+        else if (customId === 'main_dash_advert') await showServerAdvert(interaction);
+        else if (customId.startsWith('main_dash_social_page:')) await interaction.update({components:[socialListContainer(Number(customId.split(':')[1]) || 0)]});
+        else if (customId.startsWith('main_dash_social:')) await openSocialMedia(interaction, customId.split(':')[1]);
         else if (customId.startsWith('main_dash_notify:')) await toggleNotification(interaction, customId.split(':')[1]);
         else if (customId.startsWith('main_dash_rule:')) await showRule(interaction, customId.split(':')[1]);
         else if (customId.startsWith('main_dash_department:')) await showDepartment(interaction, customId.split(':')[1]);
@@ -987,6 +1104,7 @@ async function handleInteraction(interaction) {
             if (value === 'rules') await showRulesMenu(interaction, icons);
             else if (value === 'departments') await showDepartments(interaction);
             else if (value === 'partnerships') await showPartnerships(interaction, icons);
+            else if (value === 'social-media') await showSocialMedia(interaction);
             else return false;
             await resetMainDropdown(interaction, icons);
             return true;

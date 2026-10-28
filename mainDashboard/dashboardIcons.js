@@ -47,6 +47,8 @@ async function ensureDashboardIcons(guild) {
         };
     }
 
+    const social = guild.emojis.cache.find(existing => existing.name === 'msrp_event_people');
+    if (social) result.socialMedia = { id: social.id, name: social.name };
     return result;
 }
 
@@ -60,6 +62,8 @@ function getDashboardIcons(guild) {
         }
     }
 
+    const social = guild.emojis.cache.find(existing => existing.name === 'msrp_event_people');
+    if (social) result.socialMedia = { id: social.id, name: social.name };
     return result;
 }
 

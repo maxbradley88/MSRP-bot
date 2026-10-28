@@ -26,6 +26,8 @@ const commandPermissions = {
     'partnership-add': [FOUNDERSHIP_ROLE_ID],
     'partnership-remove': [FOUNDERSHIP_ROLE_ID],
     'application-manage': [FOUNDERSHIP_ROLE_ID],
+    'server-advert-manage': [FOUNDERSHIP_ROLE_ID],
+    'social-media-manage': [FOUNDERSHIP_ROLE_ID],
     'form-manage': [FOUNDERSHIP_ROLE_ID],
     'coc-team-add': [FOUNDERSHIP_ROLE_ID],
     'coc-team-remove': [FOUNDERSHIP_ROLE_ID],
